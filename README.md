@@ -95,6 +95,22 @@ Expandir cada operación y usar **Try it out** y luego **Execute**.
 Severidades: `low`, `medium`, `high`, `critical`.
 Estados: `open`, `investigating`, `resolved`.
 
+`GET /incidents` admite los filtros opcionales `status` y `severity`:
+
+```text
+GET /incidents
+GET /incidents?status=open
+GET /incidents?severity=high
+GET /incidents?status=investigating&severity=critical
+```
+
+En `/docs`, expandir `GET /incidents`, pulsar **Try it out**, seleccionar
+uno o ambos filtros y pulsar **Execute**. Para listar todos, omitir ambos
+parámetros. Si se combinan, cada incidente debe cumplir los dos filtros.
+El listado conserva el orden por ID y devuelve `200` con `[]` cuando no hay
+coincidencias. Los valores inválidos (incluidos parámetros vacíos enviados
+en la URL) devuelven `422`.
+
 Para cambiar el estado desde `/docs`, expandir
 `PATCH /incidents/{incident_id}/status`, pulsar **Try it out**, ingresar el ID
 de un incidente existente y enviar:
@@ -123,7 +139,8 @@ que los registros se conservan.
 ```
 
 Las pruebas usan una base temporal y un servidor HTTP local. Cubren salud,
-creación, listado, consulta, actualización exclusiva del estado, validaciones,
+creación, listado con filtros individuales y combinados, ausencia de coincidencias,
+consulta, actualización exclusiva del estado, validaciones,
 ID inexistente, SQL parametrizado y persistencia de los incidentes y de los
 cambios de estado después de reiniciar el proceso del servidor.
 

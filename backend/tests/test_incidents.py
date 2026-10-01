@@ -8,6 +8,7 @@ import tempfile
 import time
 import unittest
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
@@ -112,6 +113,53 @@ class IncidentTests(unittest.TestCase):
         payload = self.payload()
         del payload["status"]
         self.assertEqual(self.request("POST", "/incidents", payload)[1]["status"], "open")
+
+    def test_incident_filters(self):
+        incidents = []
+        for status in ("open", "investigating", "resolved"):
+            for severity in ("low", "medium", "high", "critical"):
+                code, incident = self.request("POST", "/incidents", self.payload(status=status, severity=severity))
+                self.assertEqual(code, 201)
+                incidents.append(incident)
+        # Include two matches for one combination to verify ordering and completeness.
+        _, duplicate = self.request("POST", "/incidents", self.payload(status="open", severity="low"))
+        incidents.append(duplicate)
+        self.assertEqual(self.request("GET", "/incidents"), (200, incidents))
+        for status in ("open", "investigating", "resolved"):
+            with self.subTest(status=status):
+                expected = [item for item in incidents if item["status"] == status]
+                self.assertEqual(self.request("GET", "/incidents?" + urlencode({"status": status})), (200, expected))
+        for severity in ("low", "medium", "high", "critical"):
+            with self.subTest(severity=severity):
+                expected = [item for item in incidents if item["severity"] == severity]
+                self.assertEqual(self.request("GET", "/incidents?" + urlencode({"severity": severity})), (200, expected))
+            for status in ("open", "investigating", "resolved"):
+                with self.subTest(status=status, severity=severity):
+                    expected = [item for item in incidents if item["status"] == status and item["severity"] == severity]
+                    query = urlencode({"status": status, "severity": severity})
+                    self.assertEqual(self.request("GET", "/incidents?" + query), (200, expected))
+
+    def test_incident_filters_without_matches(self):
+        self.request("POST", "/incidents", self.payload(status="open", severity="high"))
+        self.request("POST", "/incidents", self.payload(status="resolved", severity="low"))
+        for query in ("status=investigating", "severity=critical", "status=open&severity=low"):
+            with self.subTest(query=query):
+                self.assertEqual(self.request("GET", "/incidents?" + query), (200, []))
+
+    def test_incident_filters_invalid_values(self):
+        _, incident = self.request("POST", "/incidents", self.payload())
+        for field, values in {
+            "status": ("closed", "OPEN", "", " ", "null", "open' OR 1=1 --"),
+            "severity": ("urgent", "HIGH", "", " ", "null", "high' OR 1=1 --"),
+        }.items():
+            for value in values:
+                for combined in (False, True):
+                    with self.subTest(field=field, value=value, combined=combined):
+                        filters = {field: value}
+                        if combined:
+                            filters.update({"severity": "high"} if field == "status" else {"status": "open"})
+                        self.assertEqual(self.request("GET", "/incidents?" + urlencode(filters))[0], 422)
+        self.assertEqual(self.request("GET", "/incidents"), (200, [incident]))
 
     def test_update_status_only(self):
         _, incident = self.request("POST", "/incidents", self.payload())

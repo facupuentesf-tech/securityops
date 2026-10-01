@@ -88,9 +88,24 @@ def update_incident_status(incident_id: int, update: IncidentStatusUpdate):
 
 
 @app.get("/incidents", response_model=list[Incident])
-def list_incidents():
+def list_incidents(
+    status: Literal["open", "investigating", "resolved"] | None = None,
+    severity: Literal["low", "medium", "high", "critical"] | None = None,
+):
+    conditions = []
+    parameters = []
+    if status is not None:
+        conditions.append("status = ?")
+        parameters.append(status)
+    if severity is not None:
+        conditions.append("severity = ?")
+        parameters.append(severity)
+    query = "SELECT * FROM incidents"
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    query += " ORDER BY id"
     with closing(connect()) as connection:
-        rows = connection.execute("SELECT * FROM incidents ORDER BY id").fetchall()
+        rows = connection.execute(query, parameters).fetchall()
     return [dict(row) for row in rows]
 
 
