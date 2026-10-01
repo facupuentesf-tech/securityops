@@ -1,0 +1,34 @@
+# Entornos virtuales de Python
+.venv/
+venv/
+env/
+.env/
+
+# Secretos y configuración local
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.aws/
+
+# Archivos generados de Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Dependencias, compilaciones y registros
+node_modules/
+dist/
+build/
+*.log
+
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
+Microsoft/Windows/PowerShell/ModuleAnalysisCache
