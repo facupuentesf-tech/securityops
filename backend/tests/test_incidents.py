@@ -1,0 +1,129 @@
+import json
+from datetime import datetime, timedelta
+from pathlib import Path
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+
+BACKEND = Path(__file__).resolve().parents[1]
+
+
+class IncidentTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.database = Path(self.directory.name) / "incidents.db"
+        self.start_server()
+        self.addCleanup(self.stop_server)
+
+    def start_server(self):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+        self.base_url = f"http://127.0.0.1:{port}"
+        script = (
+            "import sys; from pathlib import Path; "
+            "sys.path.insert(0, sys.argv[1]); import main; import uvicorn; "
+            "main.DATABASE_PATH = Path(sys.argv[2]); "
+            "uvicorn.run(main.app, host='127.0.0.1', port=int(sys.argv[3]), log_level='error')"
+        )
+        self.server = subprocess.Popen(
+            [sys.executable, "-c", script, str(BACKEND), str(self.database), str(port)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        for _ in range(100):
+            try:
+                if self.request("GET", "/health")[0] == 200:
+                    return
+            except (URLError, TimeoutError):
+                pass
+            if self.server.poll() is not None:
+                self.fail("The server exited during startup")
+            time.sleep(0.05)
+        self.stop_server()
+        self.fail("The server did not start")
+
+    def stop_server(self):
+        if self.server.poll() is None:
+            self.server.terminate()
+            self.server.wait(timeout=10)
+
+    def request(self, method, path, payload=None):
+        data = json.dumps(payload).encode() if payload is not None else None
+        request = Request(
+            self.base_url + path, data=data, method=method,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            response = urlopen(request, timeout=2)
+        except HTTPError as error:
+            response = error
+        with response:
+            return response.status, json.load(response)
+
+    def payload(self, **changes):
+        return dict(title="Suspicious login", description="Failed login attempts",
+                    severity="high", status="open") | changes
+
+    def test_creation_listing_lookup_and_health(self):
+        self.assertEqual(self.request("GET", "/health"), (200, {"status": "ok"}))
+        self.assertEqual(self.request("GET", "/incidents"), (200, []))
+        payload = self.payload(title="O'Brien'); DROP TABLE incidents; --")
+        status, incident = self.request("POST", "/incidents", payload)
+        self.assertEqual(status, 201)
+        self.assertGreater(incident["id"], 0)
+        for key, value in payload.items():
+            self.assertEqual(incident[key], value)
+        date = datetime.fromisoformat(incident["created_at"].replace("Z", "+00:00"))
+        self.assertEqual(date.utcoffset(), timedelta(0))
+        self.assertEqual(self.request("GET", "/incidents"), (200, [incident]))
+        self.assertEqual(self.request("GET", f'/incidents/{incident["id"]}'), (200, incident))
+        self.assertEqual(self.request("GET", "/incidents/999999")[0], 404)
+
+    def test_invalid_payloads(self):
+        for field, values in {
+            "title": ["", "   ", "\t\n", None],
+            "description": ["", "   ", "\t\n", None],
+            "severity": ["urgent", "HIGH", "", None],
+            "status": ["closed", "OPEN", "", None],
+        }.items():
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    self.assertEqual(self.request("POST", "/incidents", self.payload(**{field: value}))[0], 422)
+        for field in ("title", "description", "severity"):
+            payload = self.payload()
+            del payload[field]
+            self.assertEqual(self.request("POST", "/incidents", payload)[0], 422)
+        self.assertEqual(self.request("GET", "/incidents"), (200, []))
+
+    def test_allowed_values_and_default_status(self):
+        for severity in ("low", "medium", "high", "critical"):
+            for status in ("open", "investigating", "resolved"):
+                code, incident = self.request("POST", "/incidents", self.payload(severity=severity, status=status))
+                self.assertEqual(code, 201)
+                self.assertEqual((incident["severity"], incident["status"]), (severity, status))
+        payload = self.payload()
+        del payload["status"]
+        self.assertEqual(self.request("POST", "/incidents", payload)[1]["status"], "open")
+
+    def test_persistence_after_process_restart(self):
+        code, incident = self.request("POST", "/incidents", self.payload())
+        self.assertEqual(code, 201)
+        self.stop_server()
+        self.start_server()
+        self.assertEqual(self.request("GET", "/incidents"), (200, [incident]))
+        self.assertEqual(self.request("GET", f'/incidents/{incident["id"]}'), (200, incident))
+        code, second = self.request("POST", "/incidents", self.payload())
+        self.assertEqual(code, 201)
+        self.assertGreater(second["id"], incident["id"])
+
+
+if __name__ == "__main__":
+    unittest.main()

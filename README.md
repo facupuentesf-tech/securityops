@@ -22,7 +22,8 @@ controles de seguridad e incidentes en una única plataforma.
 
 Stack propuesto: React, Python con FastAPI y PostgreSQL. Docker se incorporará más adelante.
 
-El primer paso implementado es una API mínima con `GET /health`.
+El backend implementa `GET /health` y un módulo inicial de incidentes con
+SQLite. PostgreSQL queda previsto para una etapa posterior.
 
 ## Ejecutar el backend en Windows PowerShell
 
@@ -65,6 +66,49 @@ en el navegador. Este endpoint permite comprobar que la API está funcionando.
 
 Para detener el servidor, presionar **Ctrl+C** en la terminal donde se ejecuta.
 Para volver a iniciarlo, repetir únicamente el comando de Uvicorn.
+
+## Probar incidentes desde /docs
+
+Con el servidor iniciado, abrir http://127.0.0.1:8000/docs.
+Expandir cada operación y usar **Try it out** y luego **Execute**.
+
+1. En `POST /incidents`, enviar este JSON:
+
+   ```json
+   {
+     "title": "Intento de acceso sospechoso",
+     "description": "Se detectaron varios intentos fallidos de inicio de sesión.",
+     "severity": "high",
+     "status": "open"
+   }
+   ```
+
+   La respuesta es `201`, con un `id` generado y `created_at` en UTC.
+   Los campos de la API usan nombres en inglés. `title`, `description` y
+   `severity` son obligatorios; `status` toma `open` si se omite.
+2. Ejecutar `GET /incidents` para listar los incidentes ordenados por ID.
+3. Ejecutar `GET /incidents/{incident_id}` con el ID recibido para consultarlo.
+   Un ID inexistente devuelve `404`.
+4. Probar título o descripción vacíos (también solo espacios) y valores
+   inválidos de severidad o estado: la respuesta debe ser `422`.
+
+Severidades: `low`, `medium`, `high`, `critical`.
+Estados: `open`, `investigating`, `resolved`.
+
+La base se crea automáticamente en `backend/securityops.db` al iniciar la API,
+independientemente del directorio desde donde se ejecute. Está excluida de Git.
+Detener y volver a iniciar Uvicorn, y repetir `GET /incidents`, permite comprobar
+que los registros se conservan.
+
+## Pruebas automatizadas
+
+```powershell
+.\backend\.venv\Scripts\python.exe -m unittest discover -s backend/tests -v
+```
+
+Las pruebas usan una base temporal y un servidor HTTP local. Cubren salud,
+creación, listado, consulta, validaciones, ID inexistente, SQL parametrizado
+y persistencia después de reiniciar el proceso del servidor.
 
 ## Estado
 

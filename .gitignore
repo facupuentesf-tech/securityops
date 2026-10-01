@@ -13,6 +13,7 @@ env/
 .aws/
 
 # Archivos generados de Python
+backend/securityops.db*
 __pycache__/
 *.py[cod]
 .pytest_cache/
