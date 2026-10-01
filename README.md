@@ -95,6 +95,22 @@ Expandir cada operación y usar **Try it out** y luego **Execute**.
 Severidades: `low`, `medium`, `high`, `critical`.
 Estados: `open`, `investigating`, `resolved`.
 
+Para cambiar el estado desde `/docs`, expandir
+`PATCH /incidents/{incident_id}/status`, pulsar **Try it out**, ingresar el ID
+de un incidente existente y enviar:
+
+```json
+{
+  "status": "investigating"
+}
+```
+
+Al pulsar **Execute**, la respuesta `200` devuelve el incidente actualizado.
+Solo cambia `status`; los demás campos se conservan. También se pueden enviar
+`open` o `resolved`. Un estado inválido, `null`, un JSON sin `status` o una
+solicitud sin cuerpo devuelve `422`. Un ID inexistente con un estado válido
+devuelve `404`.
+
 La base se crea automáticamente en `backend/securityops.db` al iniciar la API,
 independientemente del directorio desde donde se ejecute. Está excluida de Git.
 Detener y volver a iniciar Uvicorn, y repetir `GET /incidents`, permite comprobar
@@ -107,8 +123,9 @@ que los registros se conservan.
 ```
 
 Las pruebas usan una base temporal y un servidor HTTP local. Cubren salud,
-creación, listado, consulta, validaciones, ID inexistente, SQL parametrizado
-y persistencia después de reiniciar el proceso del servidor.
+creación, listado, consulta, actualización exclusiva del estado, validaciones,
+ID inexistente, SQL parametrizado y persistencia de los incidentes y de los
+cambios de estado después de reiniciar el proceso del servidor.
 
 ## Estado
 

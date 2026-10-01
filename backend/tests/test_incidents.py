@@ -113,6 +113,54 @@ class IncidentTests(unittest.TestCase):
         del payload["status"]
         self.assertEqual(self.request("POST", "/incidents", payload)[1]["status"], "open")
 
+    def test_update_status_only(self):
+        _, incident = self.request("POST", "/incidents", self.payload())
+        _, other = self.request("POST", "/incidents", self.payload())
+        path = f'/incidents/{incident["id"]}/status'
+        for status in ("investigating", "resolved", "open", "open"):
+            with self.subTest(status=status):
+                expected = incident | {"status": status}
+                self.assertEqual(
+                    self.request("PATCH", path, {"status": status, "title": "Ignored title"}),
+                    (200, expected),
+                )
+                self.assertEqual(self.request("GET", f'/incidents/{incident["id"]}'), (200, expected))
+                self.assertEqual(self.request("GET", "/incidents"), (200, [expected, other]))
+
+    def test_update_status_validations(self):
+        _, incident = self.request("POST", "/incidents", self.payload())
+        path = f'/incidents/{incident["id"]}/status'
+        payloads = [{}, {"title": "Missing status"}]
+        payloads += [{"status": value} for value in (
+            "closed", "OPEN", "", "   ", None, 1, True, [], {},
+            "resolved'; DROP TABLE incidents; --",
+        )]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                self.assertEqual(self.request("PATCH", path, payload)[0], 422)
+        self.assertEqual(self.request("PATCH", path)[0], 422)
+        self.assertEqual(self.request("GET", "/incidents"), (200, [incident]))
+
+    def test_update_status_not_found(self):
+        self.assertEqual(
+            self.request("PATCH", "/incidents/999999/status", {"status": "resolved"}),
+            (404, {"detail": "Incident not found"}),
+        )
+        self.assertEqual(self.request("GET", "/incidents"), (200, []))
+
+    def test_updated_status_persists_after_process_restart(self):
+        _, incident = self.request("POST", "/incidents", self.payload())
+        _, other = self.request("POST", "/incidents", self.payload())
+        expected = incident | {"status": "resolved"}
+        self.assertEqual(
+            self.request("PATCH", f'/incidents/{incident["id"]}/status', {"status": "resolved"}),
+            (200, expected),
+        )
+        self.stop_server()
+        self.start_server()
+        self.assertEqual(self.request("GET", f'/incidents/{incident["id"]}'), (200, expected))
+        self.assertEqual(self.request("GET", "/incidents"), (200, [expected, other]))
+
     def test_persistence_after_process_restart(self):
         code, incident = self.request("POST", "/incidents", self.payload())
         self.assertEqual(code, 201)

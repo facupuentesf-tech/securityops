@@ -45,6 +45,10 @@ class Incident(IncidentCreate):
     created_at: datetime
 
 
+class IncidentStatusUpdate(BaseModel):
+    status: Literal["open", "investigating", "resolved"]
+
+
 app = FastAPI(title="SecurityOps", lifespan=lifespan)
 
 
@@ -64,6 +68,21 @@ def create_incident(incident: IncidentCreate):
         )
         row = connection.execute(
             "SELECT * FROM incidents WHERE id = ?", (cursor.lastrowid,)
+        ).fetchone()
+    return dict(row)
+
+
+@app.patch("/incidents/{incident_id}/status", response_model=Incident)
+def update_incident_status(incident_id: int, update: IncidentStatusUpdate):
+    with closing(connect()) as connection, connection:
+        cursor = connection.execute(
+            "UPDATE incidents SET status = ? WHERE id = ?",
+            (update.status, incident_id),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Incident not found")
+        row = connection.execute(
+            "SELECT * FROM incidents WHERE id = ?", (incident_id,)
         ).fetchone()
     return dict(row)
 
