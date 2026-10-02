@@ -24,6 +24,8 @@ Stack propuesto: React, Python con FastAPI y PostgreSQL. Docker se incorporará 
 
 El backend implementa `GET /health` y un módulo inicial de incidentes con
 SQLite. PostgreSQL queda previsto para una etapa posterior.
+La interfaz inicial usa HTML, CSS y JavaScript servidos por FastAPI;
+React sigue siendo una opción para etapas futuras.
 
 ## Ejecutar el backend en Windows PowerShell
 
@@ -66,6 +68,28 @@ en el navegador. Este endpoint permite comprobar que la API está funcionando.
 
 Para detener el servidor, presionar **Ctrl+C** en la terminal donde se ejecuta.
 Para volver a iniciarlo, repetir únicamente el comando de Uvicorn.
+
+## Abrir la interfaz web
+
+Con el servidor iniciado mediante el comando anterior, abrir
+http://127.0.0.1:8000/ en el navegador. La interfaz está en español y se adapta
+a computadora y celular; todas las llamadas a la API usan rutas relativas.
+
+- El listado muestra título, severidad, estado y fecha. **Aplicar filtros**
+  permite combinar estado y severidad; **Limpiar** vuelve al listado completo.
+- **Nuevo incidente** abre el formulario. Al crearlo se muestra su detalle.
+- Pulsar el título de un incidente abre su descripción, el formulario para
+  guardar estado, el historial de estados y las notas de investigación.
+- **Agregar nota** guarda el contenido y actualiza el listado de notas.
+- **Volver a incidentes** actualiza el listado con los filtros elegidos.
+
+Las fechas se muestran en la zona horaria del navegador. La interfaz informa
+carga, listas vacías, operaciones exitosas y errores, y conserva el texto del
+formulario cuando una operación falla. Los textos de usuarios se insertan con
+`textContent`, sin interpretarlos como HTML. No requiere servicios externos,
+autenticación ni un proceso adicional de compilación. El alcance sigue siendo
+local, con el servidor escuchando en `127.0.0.1`. `/docs` y los endpoints de la
+API siguen disponibles, y se utiliza la misma base SQLite.
 
 ## Probar incidentes desde /docs
 
@@ -168,6 +192,41 @@ independientemente del directorio desde donde se ejecute. Está excluida de Git.
 Detener y volver a iniciar Uvicorn, y repetir `GET /incidents`, permite comprobar
 que los registros se conservan.
 
+## Notas de investigación
+
+Las notas se guardan en la tabla `incident_notes`, creada automáticamente al
+iniciar la API sin borrar ni recrear la base existente. Cada nota incluye
+`id`, `incident_id`, `content` y `created_at` en UTC.
+
+Para agregar una nota desde http://127.0.0.1:8000/docs, expandir
+`POST /incidents/{incident_id}/notes`, pulsar **Try it out**, ingresar el ID
+de un incidente existente y enviar:
+
+```json
+{
+  "content": "  Se revisaron los registros de acceso y se identificó la IP de origen.  "
+}
+```
+
+Al pulsar **Execute**, la respuesta `201` devuelve la nota creada con el
+contenido sin espacios al inicio y al final. El contenido debe tener entre
+1 y 5000 caracteres después de quitar esos espacios. Contenido vacío, solo
+espacios, más de 5000 caracteres, `null`, valores que no sean texto, un JSON
+sin `content` o una solicitud sin cuerpo devuelven `422`.
+
+Para listar las notas, expandir `GET /incidents/{incident_id}/notes`, pulsar
+**Try it out**, ingresar el mismo ID y pulsar **Execute**. Ejemplo:
+
+```text
+GET /incidents/1/notes
+```
+
+La respuesta `200` devuelve las notas del más antiguo al más reciente según
+`created_at`, usando `id` ascendente para desempatar. Un incidente sin notas
+devuelve `[]`. Ambos endpoints devuelven `404` si el incidente no existe
+(en el POST, con un cuerpo válido). Las notas se conservan al reiniciar la API
+y agregarlas no modifica el incidente ni su historial de estados.
+
 ## Pruebas automatizadas
 
 ```powershell
@@ -181,7 +240,27 @@ ID inexistente, SQL parametrizado y persistencia de los incidentes y de los
 cambios de estado después de reiniciar el proceso del servidor. También cubren
 historial, ausencia de entradas duplicadas, aislamiento entre incidentes,
 persistencia del historial, creación de la tabla sobre una base existente y
-reversión del estado cuando falla la escritura del historial.
+reversión del estado cuando falla la escritura del historial. Para notas cubren
+creación, recorte del contenido, límites de longitud, validaciones, listado,
+orden cronológico y desempate por ID, `404`, persistencia tras reiniciar y
+creación de la tabla conservando incidentes e historial existentes.
+También se comprueba que `/`, los archivos CSS/JavaScript y `/docs` se sirvan
+correctamente.
+
+Comprobación opcional de la interfaz en Chrome instalado en su ruta habitual
+de Windows, usando Node.js 24 y una base temporal (sin dependencias npm):
+
+```powershell
+.\backend\.venv\Scripts\python.exe backend/tests/check_browser.py
+```
+
+Se verificaron en Chrome sin ventana la creación y consulta de incidentes,
+cambio de estado e historial, validación y creación de notas, filtros combinados,
+listas vacías, recuperación de errores de red, fechas en la zona del navegador,
+renderizado seguro de textos con etiquetas HTML y ausencia de desbordamiento
+horizontal a 1280 y 390 píxeles. Esta comprobación requiere que el entorno
+permita iniciar Chrome y conectarse a su puerto local de depuración; no sustituye
+una revisión manual en un celular físico.
 
 ## Estado
 

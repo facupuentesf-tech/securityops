@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SecurityOps · Incidentes</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="/"> <span class="brand-icon">S</span> SecurityOps</a><span class="environment">Entorno local</span><a href="/docs">Documentación API ↗</a></header>
+  <main>
+    <div id="message" class="message" role="status" aria-live="polite" hidden></div>
+    <section id="list-view">
+      <div class="page-heading"><div><p class="eyebrow">CENTRO DE SEGURIDAD</p><h1>Incidentes</h1><p class="muted">Registrá, investigá y seguí los eventos de seguridad.</p></div><button id="new-button" type="button">+ Nuevo incidente</button></div>
+      <section id="create-panel" class="panel" aria-labelledby="create-heading" hidden>
+        <div class="section-heading"><h2 id="create-heading">Registrar incidente</h2><button id="cancel-create" class="secondary" type="button">Cancelar</button></div>
+        <form id="create-form">
+          <label>Título<input name="title" required placeholder="¿Qué ocurrió?"></label>
+          <label>Descripción<textarea name="description" rows="4" required placeholder="Describí el evento y los primeros hallazgos."></textarea></label>
+          <div class="form-row"><label>Severidad<select name="severity"><option value="low">Baja</option><option value="medium" selected>Media</option><option value="high">Alta</option><option value="critical">Crítica</option></select></label><label>Estado inicial<select name="status"><option value="open">Abierto</option><option value="investigating">En investigación</option><option value="resolved">Resuelto</option></select></label></div>
+          <button type="submit">Crear incidente</button>
+        </form>
+      </section>
+      <section class="panel" aria-labelledby="list-heading">
+        <div class="section-heading"><h2 id="list-heading">Registro de incidentes</h2><span id="count" class="muted"></span></div>
+        <form id="filter-form" class="filters"><label>Estado<select name="status"><option value="">Todos los estados</option><option value="open">Abierto</option><option value="investigating">En investigación</option><option value="resolved">Resuelto</option></select></label><label>Severidad<select name="severity"><option value="">Todas las severidades</option><option value="low">Baja</option><option value="medium">Media</option><option value="high">Alta</option><option value="critical">Crítica</option></select></label><button type="submit" class="secondary">Aplicar filtros</button><button id="clear-filters" type="button" class="text-button">Limpiar</button></form>
+        <p id="list-feedback" class="empty" role="status"></p>
+        <div id="incident-list" class="incident-list"></div>
+      </section>
+    </section>
+    <section id="detail-view" hidden>
+      <button id="back-button" class="text-button" type="button">← Volver a incidentes</button>
+      <p id="detail-feedback" class="empty" role="status"></p>
+      <div id="detail-content" hidden>
+        <div class="page-heading"><div><p id="detail-id" class="eyebrow"></p><h1 id="detail-title" tabindex="-1"></h1><p id="detail-date" class="muted"></p></div><span id="detail-severity" class="badge"></span></div>
+        <div class="detail-grid">
+          <div>
+            <section class="panel"><h2>Descripción</h2><p id="detail-description" class="user-text"></p><form id="status-form" class="status-form"><label>Estado<select name="status"><option value="open">Abierto</option><option value="investigating">En investigación</option><option value="resolved">Resuelto</option></select></label><button type="submit">Guardar estado</button></form></section>
+            <section class="panel"><h2>Historial de estados</h2><p id="history-feedback" class="muted" role="status"></p><ol id="history-list" class="timeline"></ol></section>
+          </div>
+          <section class="panel"><h2>Notas de investigación</h2><p class="muted">Documentá los avances de la investigación.</p><form id="note-form"><label>Nueva nota<textarea name="content" rows="4" required placeholder="Agregá un hallazgo o una acción realizada."></textarea></label><small class="muted">Entre 1 y 5000 caracteres, sin contar espacios en los extremos.</small><button type="submit">Agregar nota</button></form><p id="notes-feedback" class="muted" role="status"></p><ol id="notes-list" class="notes"></ol></section>
+        </div>
+      </div>
+    </section>
+    <footer>SecurityOps · Las fechas se muestran en la zona horaria de tu navegador.</footer>
+  </main>
+</body>
+</html>
