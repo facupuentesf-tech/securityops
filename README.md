@@ -7,29 +7,52 @@ Plataforma de gestión de seguridad para pequeñas y medianas empresas.
 Centralizar la gestión de activos, usuarios, riesgos,
 controles de seguridad e incidentes en una única plataforma.
 
-## Funcionalidades
+## Primera versión funcional
+
+Aplicación local para registrar e investigar incidentes de seguridad.
+Todavía no tiene autenticación, usuarios, roles ni control de permisos.
+Quien accede a la interfaz o a la API puede consultar y modificar los datos.
+El comando de inicio escucha únicamente en `127.0.0.1`; esta versión no incluye
+publicación ni despliegue para uso compartido.
+
+### Funciones implementadas
+
+- Crear, listar y consultar incidentes.
+- Filtrar por estado y severidad, individualmente o combinados.
+- Cambiar el estado y consultar su historial persistente.
+- Agregar y consultar notas de investigación.
+- Interfaz en español adaptable a computadora y celular, con fechas locales
+  y mensajes de carga, listas vacías, éxito y errores.
+- Persistencia en SQLite, validación de datos y API interactiva en `/docs`.
+- Pruebas con base temporal y comprobación opcional de la interfaz en Chrome.
+
+### Objetivos y mejoras futuras
+
+La visión original abarca los siguientes módulos. Aún no están implementados:
 
 - Gestión de usuarios y roles
 - Inventario de activos
 - Gestión de riesgos
 - Controles de seguridad
-- Gestión de incidentes
-- Auditoría
+- Ampliación de incidentes con responsables y activos relacionados
+- Auditoría general y atribución de acciones a usuarios
 - Reportes
 - Dashboard
 
 ## Tecnologías
 
-Stack propuesto: React, Python con FastAPI y PostgreSQL. Docker se incorporará más adelante.
-
-El backend implementa `GET /health` y un módulo inicial de incidentes con
-SQLite. PostgreSQL queda previsto para una etapa posterior.
-La interfaz inicial usa HTML, CSS y JavaScript servidos por FastAPI;
-React sigue siendo una opción para etapas futuras.
+La versión actual usa Python con FastAPI, Uvicorn y SQLite mediante `sqlite3`
+de la biblioteca estándar. FastAPI sirve la interfaz HTML/CSS/JavaScript
+desde `GET /` y sus archivos desde `/static`. No requiere npm para ejecutarse.
+React, PostgreSQL y Docker pertenecen al stack considerado para etapas futuras.
 
 ## Ejecutar el backend en Windows PowerShell
 
-Desde la carpeta del repositorio (`I:\securityops`), crear el entorno virtual
+Requisitos: Python (esta versión se comprobó con Python 3.13), PowerShell y
+un navegador moderno. Node.js y Chrome solo se necesitan para la comprobación
+opcional de la interfaz. PostgreSQL no es necesario.
+
+Desde la carpeta del repositorio (`I:\securityops` en este equipo), crear el entorno virtual
 e instalar las dependencias:
 
 ```powershell
@@ -90,6 +113,25 @@ formulario cuando una operación falla. Los textos de usuarios se insertan con
 autenticación ni un proceso adicional de compilación. El alcance sigue siendo
 local, con el servidor escuchando en `127.0.0.1`. `/docs` y los endpoints de la
 API siguen disponibles, y se utiliza la misma base SQLite.
+Todavía no hay inicio de sesión ni control de permisos.
+
+## Endpoints disponibles
+
+| Método | Ruta | Función |
+| --- | --- | --- |
+| GET | `/` | Interfaz web |
+| GET | `/health` | Respuesta `{"status":"ok"}` |
+| POST | `/incidents` | Crear incidente (`201`) |
+| GET | `/incidents` | Listar con filtros opcionales `status` y `severity` |
+| GET | `/incidents/{incident_id}` | Consultar incidente |
+| PATCH | `/incidents/{incident_id}/status` | Cambiar estado |
+| GET | `/incidents/{incident_id}/history` | Consultar historial de estados |
+| POST | `/incidents/{incident_id}/notes` | Crear nota (`201`) |
+| GET | `/incidents/{incident_id}/notes` | Consultar notas |
+
+`/docs` permite explorar y probar la API. Las consultas a un incidente
+inexistente devuelven `404`; entradas inválidas devuelven `422` antes de ejecutar
+la operación. No hay endpoints para borrar incidentes ni editar o borrar notas.
 
 ## Probar incidentes desde /docs
 
@@ -247,8 +289,10 @@ creación de la tabla conservando incidentes e historial existentes.
 También se comprueba que `/`, los archivos CSS/JavaScript y `/docs` se sirvan
 correctamente.
 
-Comprobación opcional de la interfaz en Chrome instalado en su ruta habitual
-de Windows, usando Node.js 24 y una base temporal (sin dependencias npm):
+Comprobación opcional de la interfaz, usando Node.js 24 y Chrome instalado en
+`C:\Program Files\Google\Chrome\Application\chrome.exe`, con una base temporal
+(sin dependencias npm). Esta prueba inicia y detiene su propio servidor;
+no requiere iniciar Uvicorn por separado:
 
 ```powershell
 .\backend\.venv\Scripts\python.exe backend/tests/check_browser.py
@@ -262,6 +306,15 @@ horizontal a 1280 y 390 píxeles. Esta comprobación requiere que el entorno
 permita iniciar Chrome y conectarse a su puerto local de depuración; no sustituye
 una revisión manual en un celular físico.
 
+## Documentación del proyecto
+
+- [Definición y objetivos](docs/project-definition.md)
+- [Requisitos implementados y futuros](docs/requirements.md)
+- [Arquitectura actual](docs/architecture.md)
+- [Diseño de base de datos](docs/database-design.md)
+- [Modelo del sistema](docs/system-model.md)
+
 ## Estado
 
-🚧 En desarrollo
+Primera versión funcional local. El desarrollo de los módulos restantes
+continúa dentro de los objetivos originales de SecurityOps.

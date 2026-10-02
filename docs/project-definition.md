@@ -22,7 +22,7 @@ SecurityOps is a web-based platform designed to centralize the
 management of cybersecurity information for small and medium-sized
 businesses.
 
-The platform will allow organizations to manage:
+The long-term platform vision will allow organizations to manage:
 
 - Users and permissions
 - Technological assets
@@ -51,19 +51,38 @@ information through a single platform.
 The project will prioritize security, usability, documentation and
 maintainability.
 
-## Project Scope
+## First Functional Version: Implemented Scope
 
-The first version of SecurityOps will focus on:
+The current version is a local incident-management prototype. It provides:
+
+- Incident creation, listing, detail and optional status/severity filters.
+- Status changes with persistent history recorded atomically with the update.
+- Investigation notes with validation and persistent storage.
+- A responsive Spanish-language HTML/CSS/JavaScript interface served by FastAPI.
+- SQLite persistence, interactive API documentation and automated tests.
+
+The application runs locally through Uvicorn on `127.0.0.1`. It has no
+authentication, user management or permission enforcement. Data is not separated
+by company and changes are not attributed to users. The status history is a
+specific incident feature, not the general audit module envisioned below.
+
+## Original Project Scope and Future Work
+
+The original project roadmap is preserved. Beyond the initial incident module,
+the following capabilities remain future work:
 
 1. User management
 2. Role-based access control
 3. Asset management
 4. Risk management
 5. Security controls
-6. Security incidents
+6. Extended incident management with responsible users and related assets
 7. Audit logs
 8. Dashboard and basic metrics
 
 Features such as automated vulnerability scanning, advanced compliance
 automation and artificial intelligence assistance will be considered
 for future versions.
+
+React, PostgreSQL and Docker remain options for later stages; the implemented
+version uses plain HTML/CSS/JavaScript, Python with FastAPI and SQLite.
