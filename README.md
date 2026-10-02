@@ -127,6 +127,42 @@ Solo cambia `status`; los demás campos se conservan. También se pueden enviar
 solicitud sin cuerpo devuelve `422`. Un ID inexistente con un estado válido
 devuelve `404`.
 
+## Historial de cambios de estado
+
+Cada cambio efectivo realizado con `PATCH /incidents/{incident_id}/status`
+se registra en la tabla SQLite `incident_status_history`, con `id`,
+`incident_id`, `previous_status`, `new_status` y `changed_at` en UTC.
+La actualización y la entrada de historial se confirman en la misma transacción:
+si falla el registro del historial, se revierte el cambio de estado.
+Las actualizaciones concurrentes se serializan para registrar el estado anterior correcto.
+Enviar el estado actual devuelve el incidente sin agregar una entrada.
+
+Para consultar el historial en `/docs`, expandir
+`GET /incidents/{incident_id}/history`, pulsar **Try it out**, ingresar el ID
+del incidente que se acaba de actualizar y pulsar **Execute**. Por ejemplo:
+
+```text
+GET /incidents/1/history
+```
+
+La respuesta `200` es una lista de cambios ordenados por ID, del más antiguo
+al más reciente. Cada entrada tiene esta forma (valores ilustrativos):
+
+```json
+{
+  "id": 1,
+  "incident_id": 1,
+  "previous_status": "open",
+  "new_status": "investigating",
+  "changed_at": "2026-10-01T18:00:00Z"
+}
+```
+
+Un incidente sin cambios devuelve `[]`; un ID inexistente devuelve `404`.
+La tabla se agrega automáticamente al iniciar la API, sin borrar ni modificar
+los incidentes existentes. El historial comienza con los cambios realizados
+desde esta implementación: no reconstruye cambios pasados ni registra la creación.
+
 La base se crea automáticamente en `backend/securityops.db` al iniciar la API,
 independientemente del directorio desde donde se ejecute. Está excluida de Git.
 Detener y volver a iniciar Uvicorn, y repetir `GET /incidents`, permite comprobar
@@ -142,7 +178,10 @@ Las pruebas usan una base temporal y un servidor HTTP local. Cubren salud,
 creación, listado con filtros individuales y combinados, ausencia de coincidencias,
 consulta, actualización exclusiva del estado, validaciones,
 ID inexistente, SQL parametrizado y persistencia de los incidentes y de los
-cambios de estado después de reiniciar el proceso del servidor.
+cambios de estado después de reiniciar el proceso del servidor. También cubren
+historial, ausencia de entradas duplicadas, aislamiento entre incidentes,
+persistencia del historial, creación de la tabla sobre una base existente y
+reversión del estado cuando falla la escritura del historial.
 
 ## Estado
 
