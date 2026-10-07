@@ -8,8 +8,19 @@
   <script src="/static/app.js" defer></script>
 </head>
 <body>
-  <header class="topbar"><a class="brand" href="/"> <span class="brand-icon">S</span> SecurityOps</a><span class="environment">Entorno local</span><a href="/docs">Documentación API ↗</a></header>
+  <header class="topbar"><a class="brand" href="/"> <span class="brand-icon">S</span> SecurityOps</a><span class="environment">Entorno local · una organización</span><span id="account" class="account" hidden><span id="account-name"></span><button id="logout-button" class="secondary" type="button">Cerrar sesión</button></span><a href="/docs">Documentación API ↗</a></header>
   <main>
+    <section id="login-view" class="panel auth-panel" aria-labelledby="login-heading" hidden>
+      <p class="eyebrow">ACCESO LOCAL</p><h1 id="login-heading">Iniciar sesión</h1>
+      <p class="muted">Ingresá con la cuenta que te asignó el administrador.</p>
+      <form id="login-form">
+        <label>Correo electrónico<input name="email" type="email" autocomplete="username" required></label>
+        <label>Contraseña<input name="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit">Iniciar sesión</button>
+      </form>
+      <p id="login-feedback" class="message error" role="alert" hidden></p>
+    </section>
+    <section id="app-view" hidden>
     <div id="message" class="message" role="status" aria-live="polite" hidden></div>
     <section id="list-view">
       <div class="page-heading"><div><p class="eyebrow">CENTRO DE SEGURIDAD</p><h1>Incidentes</h1><p class="muted">Registrá, investigá y seguí los eventos de seguridad.</p></div><button id="new-button" type="button">+ Nuevo incidente</button></div>
@@ -43,7 +54,18 @@
         </div>
       </div>
     </section>
+    <section id="users-view" class="panel" aria-labelledby="users-heading" hidden>
+      <div class="section-heading"><div><h2 id="users-heading">Usuarios</h2><p class="muted">Creá cuentas y asigná un rol. Desactivar una cuenta revoca su acceso.</p></div><button id="reload-users" class="secondary" type="button">Actualizar</button></div>
+      <form id="user-create-form">
+        <div class="form-row"><label>Nombre<input name="display_name" required maxlength="120"></label><label>Correo<input name="email" type="email" required maxlength="254"></label></div>
+        <div class="form-row"><label>Contraseña inicial<input name="password" type="password" required minlength="12" maxlength="128" autocomplete="new-password"></label><label>Rol<select name="role"><option value="analista">Analista</option><option value="lector">Lector</option><option value="administrador">Administrador</option></select></label></div>
+        <button type="submit">Crear usuario</button>
+      </form>
+      <p id="users-feedback" class="muted" role="status"></p>
+      <div id="user-list" class="user-list"></div>
+    </section>
     <footer>SecurityOps · Las fechas se muestran en la zona horaria de tu navegador.</footer>
+    </section>
   </main>
 </body>
 </html>

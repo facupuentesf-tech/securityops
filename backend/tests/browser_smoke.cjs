@@ -6,9 +6,18 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const base = process.argv[2];
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'securityops-browser-'));
-const chrome = spawn('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+const chromeCandidates = [
+  process.env.SECURITYOPS_CHROME,
+  process.env['ProgramFiles'] && path.join(process.env['ProgramFiles'], 'Google', 'Chrome', 'Application', 'chrome.exe'),
+  process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'Google', 'Chrome', 'Application', 'chrome.exe'),
+  process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+].filter(Boolean);
+const chromePath = chromeCandidates.find(candidate => fs.existsSync(candidate)) || 'chrome.exe';
+const chrome = spawn(chromePath,
   ['--headless=new', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], {stdio:'ignore', windowsHide:true});
 let socket;
+let closeBrowser = async () => {};
+let closingBrowser = false;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function poll(fn) {
   for (let i=0;i<150;i++) { const result = await fn(); if(result) return result; await delay(100); }
@@ -26,13 +35,14 @@ async function poll(fn) {
   const pending = new Map();
   socket.onmessage = event => { const data=JSON.parse(event.data); if(pending.has(data.id)) { const {resolve,reject}=pending.get(data.id); pending.delete(data.id); data.error ? reject(new Error(JSON.stringify(data.error))) : resolve(data.result); } };
   socket.onclose = event => { for(const {reject} of pending.values()) reject(new Error('DevTools closed: '+event.code+' '+event.reason)); };
-  socket.onerror = event => { console.error('DevTools connection error',event.message); };
+  socket.onerror = event => { if(!closingBrowser) console.error('DevTools connection error',event.message); };
   function command(method,params={}) {return new Promise((resolve,reject) => {
     const id=++sequence;
     const timer=setTimeout(()=>reject(new Error('DevTools timeout: '+method)),10000);
     pending.set(id,{resolve:value=>{clearTimeout(timer);resolve(value);},reject:error=>{clearTimeout(timer);reject(error);}});
     socket.send(JSON.stringify({id,method,params}));
   });}
+  closeBrowser = () => {closingBrowser=true;return command('Browser.close');};
   async function evaluate(expression) {
     const result=await command('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});
     if(result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
@@ -43,6 +53,8 @@ async function poll(fn) {
   await command('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
   await command('Emulation.setTimezoneOverride',{timezoneId:'America/Argentina/Buenos_Aires'});
   await command('Page.navigate',{url:base});
+  await wait(`document.getElementById('login-view').hidden === false`);
+  await evaluate(`(() => {const f=document.getElementById('login-form');f.elements.email.value='admin@example.test';f.elements.password.value='correct horse battery';f.requestSubmit();})()`);
   await wait(`document.getElementById('list-feedback')?.textContent.includes('Todavía')`);
   assert.equal(await evaluate(`document.documentElement.lang`),'es');
   await evaluate(`document.getElementById('new-button').click()`);
@@ -77,11 +89,44 @@ async function poll(fn) {
   await evaluate(`window.fetch=window.originalFetch;document.getElementById('filter-form').requestSubmit()`);
   await wait(`document.querySelectorAll('.incident').length === 1`);
   const docs=await fetch(base+'/docs');assert.equal(docs.status,200);
-  console.log('OK: creación, detalle, estado, historial, notas, filtros, listas vacías, XSS, fechas locales, errores de red, /docs y anchos 1280/390.');
+  await evaluate(`(() => {const f=document.getElementById('user-create-form');f.elements.display_name.value='Smoke Reader';f.elements.email.value='smoke-reader@example.test';f.elements.password.value='smoke reader password';f.elements.role.value='lector';f.requestSubmit();})()`);
+  await wait(`document.getElementById('user-list').textContent.includes('smoke-reader@example.test')`);
+  await evaluate(`document.getElementById('logout-button').click()`);
+  await wait(`document.getElementById('login-view').hidden === false`);
+  await evaluate(`(() => {const f=document.getElementById('login-form');f.elements.email.value='smoke-reader@example.test';f.elements.password.value='smoke reader password';f.requestSubmit();})()`);
+  try {
+    await wait(`document.getElementById('account-name').textContent.includes('Lector') && document.querySelectorAll('.incident').length === 1`);
+  } catch (error) {
+    console.error('Reader UI state:', await evaluate(`JSON.stringify({
+      login: document.getElementById('login-feedback').textContent,
+      list: document.getElementById('list-feedback').textContent,
+      account: document.getElementById('account-name').textContent,
+      users: document.getElementById('user-list').textContent
+    })`));
+    throw error;
+  }
+  assert.equal(await evaluate(`document.getElementById('new-button').hidden && document.getElementById('users-view').hidden`),true);
+  await evaluate(`document.querySelector('.incident-title').click()`);
+  await wait(`document.getElementById('detail-content').hidden === false`);
+  assert.equal(await evaluate(`document.getElementById('status-form').hidden && document.getElementById('note-form').hidden`),true);
+  console.log('OK: login/logout, administración de usuarios, lector, incidentes, historial, notas, filtros, XSS, fechas locales, errores de red, /docs y anchos 1280/390.');
   await command('Browser.close');
 })().catch(error => { console.error(error);process.exitCode=1; }).finally(async () => {
+  if(socket && socket.readyState===WebSocket.OPEN) {
+    try { await closeBrowser(); } catch {}
+  }
   if(socket) socket.close();
-  if(chrome.exitCode===null) {chrome.kill(); await delay(500);}
+  if(chrome.exitCode===null) {
+    await new Promise(resolve => {
+      const done = () => {clearTimeout(timer);resolve();};
+      const timer = setTimeout(() => {
+        if(chrome.exitCode===null) chrome.kill();
+        if(chrome.exitCode!==null) done();
+        else chrome.once('exit',done);
+      },5000);
+      chrome.once('exit',done);
+    });
+  }
   const resolvedProfile=path.resolve(profile);
   assert.equal(path.dirname(resolvedProfile),path.resolve(os.tmpdir()));
   assert.ok(path.basename(resolvedProfile).startsWith('securityops-browser-'));

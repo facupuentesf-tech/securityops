@@ -51,34 +51,41 @@ information through a single platform.
 The project will prioritize security, usability, documentation and
 maintainability.
 
-## First Functional Version: Implemented Scope
+## Implemented Scope
 
-The current version is a local incident-management prototype. It provides:
+The current version is a local, single-organization incident-management
+prototype. It provides:
 
 - Incident creation, listing, detail and optional status/severity filters.
 - Status changes with persistent history recorded atomically with the update.
 - Investigation notes with validation and persistent storage.
+- User login/logout, scrypt password hashes, opaque server-side sessions in
+  `HttpOnly` cookies and CSRF protection for state-changing requests.
+- Administrator-managed user accounts and backend-enforced administrator,
+  analyst and reader permissions.
+- User attribution for new status-history entries and notes.
+- Versioned SQLite migrations that preserve existing incident data.
 - A responsive Spanish-language HTML/CSS/JavaScript interface served by FastAPI.
 - SQLite persistence, interactive API documentation and automated tests.
 
-The application runs locally through Uvicorn on `127.0.0.1`. It has no
-authentication, user management or permission enforcement. Data is not separated
-by company and changes are not attributed to users. The status history is a
-specific incident feature, not the general audit module envisioned below.
+The application runs locally through Uvicorn on `127.0.0.1`. Organizations,
+tenant isolation and shared deployment are not implemented. Existing history
+and notes are preserved during migration, but cannot be attributed to users
+retroactively. Incident status history is still a specific incident feature,
+not the general audit module envisioned below.
 
 ## Original Project Scope and Future Work
 
 The original project roadmap is preserved. Beyond the initial incident module,
 the following capabilities remain future work:
 
-1. User management
-2. Role-based access control
-3. Asset management
-4. Risk management
-5. Security controls
-6. Extended incident management with responsible users and related assets
-7. Audit logs
-8. Dashboard and basic metrics
+1. Multi-organization support and tenant isolation
+2. Asset management
+3. Risk management
+4. Security controls
+5. Extended incident management with responsible users and related assets
+6. General audit logs
+7. Dashboard and basic metrics
 
 Features such as automated vulnerability scanning, advanced compliance
 automation and artificial intelligence assistance will be considered

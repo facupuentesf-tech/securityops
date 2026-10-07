@@ -1,16 +1,40 @@
+import argparse
+import base64
+import hashlib
+import hmac
+import os
+import re
+import secrets
 import sqlite3
+import sys
 from contextlib import asynccontextmanager, closing
 from datetime import datetime, timezone
+from getpass import fallback_getpass, getpass
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StringConstraints
 
 
-DATABASE_PATH = Path(__file__).resolve().parent / "securityops.db"
+DATABASE_PATH = Path(
+    os.environ.get("SECURITYOPS_DATABASE", Path(__file__).resolve().parent / "securityops.db")
+).expanduser().resolve()
+MIGRATIONS_PATH = Path(__file__).resolve().parent / "migrations"
+SESSION_COOKIE = "securityops_session"
+SESSION_LIFETIME = 12 * 60 * 60
+PASSWORD_MIN_LENGTH = 12
+ROLES = ("administrador", "analista", "lector")
+Email = Annotated[str, StringConstraints(
+    strip_whitespace=True,
+    min_length=3,
+    max_length=254,
+    pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+)]
+DisplayName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+Password = Annotated[str, StringConstraints(min_length=PASSWORD_MIN_LENGTH, max_length=128)]
 
 
 def connect() -> sqlite3.Connection:
@@ -20,46 +44,147 @@ def connect() -> sqlite3.Connection:
     return connection
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    with closing(connect()) as connection, connection:
+def migrate_database() -> None:
+    with closing(connect()) as connection:
         connection.execute("""
-            CREATE TABLE IF NOT EXISTS incidents (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL CHECK (length(trim(title)) > 0),
-                description TEXT NOT NULL CHECK (length(trim(description)) > 0),
-                severity TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high', 'critical')),
-                status TEXT NOT NULL CHECK (status IN ('open', 'investigating', 'resolved')),
-                created_at TEXT NOT NULL
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL
             )
         """)
-        connection.execute("""
-            CREATE TABLE IF NOT EXISTS incident_status_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                incident_id INTEGER NOT NULL REFERENCES incidents(id),
-                previous_status TEXT NOT NULL CHECK (previous_status IN ('open', 'investigating', 'resolved')),
-                new_status TEXT NOT NULL CHECK (new_status IN ('open', 'investigating', 'resolved')),
-                changed_at TEXT NOT NULL,
-                CHECK (previous_status <> new_status)
+        applied = {
+            row["version"]
+            for row in connection.execute("SELECT version FROM schema_migrations")
+        }
+        migrations = sorted(MIGRATIONS_PATH.glob("[0-9][0-9][0-9]_*.sql"))
+        for migration in migrations:
+            version = int(migration.name[:3])
+            if version in applied:
+                continue
+            script = migration.read_text(encoding="utf-8")
+            applied_at = datetime.now(timezone.utc).isoformat()
+            transaction = (
+                "BEGIN IMMEDIATE;\n"
+                + script
+                + "\nINSERT INTO schema_migrations (version, applied_at) VALUES ("
+                + str(version)
+                + ", '"
+                + applied_at
+                + "');\nCOMMIT;"
             )
-        """)
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_incident_history "
-            "ON incident_status_history (incident_id, id)"
+            try:
+                connection.executescript(transaction)
+            except sqlite3.Error:
+                if connection.in_transaction:
+                    connection.rollback()
+                raise
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_bytes(16)
+    digest = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=64)
+    salt_text = base64.urlsafe_b64encode(salt).decode("ascii")
+    digest_text = base64.urlsafe_b64encode(digest).decode("ascii")
+    return f"scrypt$16384$8$1${salt_text}${digest_text}"
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    try:
+        algorithm, n, r, p, salt_text, digest_text = stored_hash.split("$")
+        if algorithm != "scrypt":
+            return False
+        salt = base64.urlsafe_b64decode(salt_text.encode("ascii"))
+        expected = base64.urlsafe_b64decode(digest_text.encode("ascii"))
+        actual = hashlib.scrypt(
+            password.encode("utf-8"),
+            salt=salt,
+            n=int(n),
+            r=int(r),
+            p=int(p),
+            dklen=len(expected),
         )
-        connection.execute("""
-            CREATE TABLE IF NOT EXISTS incident_notes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                incident_id INTEGER NOT NULL REFERENCES incidents(id),
-                content TEXT NOT NULL CHECK (length(content) BETWEEN 1 AND 5000),
-                created_at TEXT NOT NULL
-            )
-        """)
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_incident_notes "
-            "ON incident_notes (incident_id, created_at, id)"
-        )
-    yield
+    except (ValueError, TypeError, UnicodeError):
+        return False
+    return hmac.compare_digest(actual, expected)
+
+
+def public_user(row: sqlite3.Row | dict) -> dict:
+    return {
+        "id": row["id"],
+        "display_name": row["display_name"],
+        "email": row["email"],
+        "role": row["role"],
+        "is_active": bool(row["is_active"]),
+        "created_at": row["created_at"],
+    }
+
+
+def session_user(request: Request) -> dict | None:
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return None
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    with closing(connect()) as connection:
+        row = connection.execute(
+            """
+            SELECT s.csrf_token, s.expires_at, u.id, u.display_name, u.email, u.role, u.is_active
+            FROM sessions s JOIN users u ON u.id = s.user_id
+            WHERE s.token_hash = ?
+            """,
+            (token_hash,),
+        ).fetchone()
+    if row is None or row["expires_at"] <= int(datetime.now(timezone.utc).timestamp()) or not row["is_active"]:
+        return None
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        supplied_csrf = request.headers.get("X-CSRF-Token", "")
+        if not hmac.compare_digest(supplied_csrf, row["csrf_token"]):
+            raise HTTPException(status_code=403, detail="CSRF token missing or invalid")
+    return {
+        "id": row["id"],
+        "display_name": row["display_name"],
+        "email": row["email"],
+        "role": row["role"],
+        "csrf_token": row["csrf_token"],
+    }
+
+
+def require_user(request: Request) -> dict:
+    user = session_user(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return user
+
+
+def require_roles(*roles: str):
+    def dependency(user: dict = Depends(require_user)) -> dict:
+        if user["role"] not in roles:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return user
+
+    return dependency
+
+
+class LoginRequest(BaseModel):
+    email: Email
+    password: str = Field(min_length=1, max_length=128)
+
+
+class UserCreate(BaseModel):
+    display_name: DisplayName
+    email: Email
+    password: Password
+    role: Literal["administrador", "analista", "lector"]
+
+
+class UserUpdate(BaseModel):
+    display_name: DisplayName | None = None
+    email: Email | None = None
+    role: Literal["administrador", "analista", "lector"] | None = None
+    is_active: bool | None = None
+
+
+class PasswordReset(BaseModel):
+    password: Password
 
 
 class IncidentCreate(BaseModel):
@@ -84,6 +209,8 @@ class IncidentStatusHistory(BaseModel):
     previous_status: Literal["open", "investigating", "resolved"]
     new_status: Literal["open", "investigating", "resolved"]
     changed_at: datetime
+    changed_by: int | None = None
+    changed_by_name: str | None = None
 
 
 class IncidentNoteCreate(BaseModel):
@@ -94,6 +221,14 @@ class IncidentNote(IncidentNoteCreate):
     id: int
     incident_id: int
     created_at: datetime
+    created_by: int | None = None
+    created_by_name: str | None = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    migrate_database()
+    yield
 
 
 app = FastAPI(title="SecurityOps", lifespan=lifespan)
@@ -111,8 +246,164 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.post("/auth/login")
+def login(credentials: LoginRequest, request: Request, response: Response):
+    with closing(connect()) as connection:
+        row = connection.execute(
+            "SELECT * FROM users WHERE email = ? COLLATE NOCASE",
+            (credentials.email.strip().lower(),),
+        ).fetchone()
+    if row is None or not row["is_active"] or not verify_password(credentials.password, row["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    csrf_token = secrets.token_urlsafe(32)
+    expires_at = int(datetime.now(timezone.utc).timestamp()) + SESSION_LIFETIME
+    with closing(connect()) as connection, connection:
+        connection.execute("DELETE FROM sessions WHERE expires_at <= ?", (int(datetime.now(timezone.utc).timestamp()),))
+        connection.execute(
+            "INSERT INTO sessions (token_hash, user_id, csrf_token, expires_at) VALUES (?, ?, ?, ?)",
+            (token_hash, row["id"], csrf_token, expires_at),
+        )
+    response.set_cookie(
+        key=SESSION_COOKIE,
+        value=token,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="strict",
+        path="/",
+        max_age=SESSION_LIFETIME,
+    )
+    return {"user": public_user(row), "csrf_token": csrf_token}
+
+
+@app.get("/auth/session")
+def get_session(request: Request):
+    user = session_user(request)
+    if user is None:
+        return {"user": None, "csrf_token": None}
+    return {
+        "user": {key: value for key, value in user.items() if key != "csrf_token"},
+        "csrf_token": user["csrf_token"],
+    }
+
+
+@app.post("/auth/logout")
+def logout(request: Request, response: Response, user: dict = Depends(require_user)):
+    token = request.cookies.get(SESSION_COOKIE)
+    if token:
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        with closing(connect()) as connection, connection:
+            connection.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+    response.delete_cookie(
+        key=SESSION_COOKIE,
+        path="/",
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="strict",
+    )
+    return {"status": "ok"}
+
+
+@app.get("/users")
+def list_users(_: dict = Depends(require_roles("administrador"))):
+    with closing(connect()) as connection:
+        rows = connection.execute(
+            "SELECT id, display_name, email, role, is_active, created_at FROM users ORDER BY id"
+        ).fetchall()
+    return [public_user(row) for row in rows]
+
+
+@app.post("/users", status_code=201)
+def create_user(user: UserCreate, _: dict = Depends(require_roles("administrador"))):
+    created_at = datetime.now(timezone.utc).isoformat()
+    try:
+        with closing(connect()) as connection, connection:
+            cursor = connection.execute(
+                "INSERT INTO users (display_name, email, password_hash, role, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    user.display_name.strip(),
+                    user.email.strip().lower(),
+                    hash_password(user.password),
+                    user.role,
+                    created_at,
+                ),
+            )
+            row = connection.execute(
+                "SELECT id, display_name, email, role, is_active, created_at FROM users WHERE id = ?",
+                (cursor.lastrowid,),
+            ).fetchone()
+    except sqlite3.IntegrityError as error:
+        if "users.email" in str(error):
+            raise HTTPException(status_code=409, detail="A user with this email already exists") from error
+        raise
+    return public_user(row)
+
+
+@app.patch("/users/{user_id}")
+def update_user(user_id: int, update: UserUpdate, actor: dict = Depends(require_roles("administrador"))):
+    changes = update.model_dump(exclude_unset=True)
+    if not changes or any(value is None for value in changes.values()):
+        raise HTTPException(status_code=422, detail="Provide non-null user fields to update")
+    if "display_name" in changes:
+        changes["display_name"] = changes["display_name"].strip()
+    if "email" in changes:
+        changes["email"] = changes["email"].strip().lower()
+    with closing(connect()) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        target = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if target is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        will_be_admin = changes.get("role", target["role"]) == "administrador"
+        will_be_active = changes.get("is_active", bool(target["is_active"]))
+        if target["id"] == actor["id"] and not will_be_active:
+            raise HTTPException(status_code=409, detail="You cannot deactivate your own account")
+        if target["role"] == "administrador" and target["is_active"] and not (will_be_admin and will_be_active):
+            remaining = connection.execute(
+                "SELECT COUNT(*) FROM users WHERE role = 'administrador' AND is_active = 1 AND id <> ?",
+                (user_id,),
+            ).fetchone()[0]
+            if remaining == 0:
+                raise HTTPException(status_code=409, detail="At least one active administrator is required")
+        assignments = ", ".join(f"{field} = ?" for field in changes)
+        try:
+            connection.execute(
+                f"UPDATE users SET {assignments} WHERE id = ?",
+                (*changes.values(), user_id),
+            )
+        except sqlite3.IntegrityError as error:
+            if "users.email" in str(error):
+                raise HTTPException(status_code=409, detail="A user with this email already exists") from error
+            raise
+        row = connection.execute(
+            "SELECT id, display_name, email, role, is_active, created_at FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    return public_user(row)
+
+
+@app.post("/users/{user_id}/password")
+def reset_user_password(
+    user_id: int,
+    reset: PasswordReset,
+    _: dict = Depends(require_roles("administrador")),
+):
+    with closing(connect()) as connection, connection:
+        target = connection.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+        if target is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        connection.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (hash_password(reset.password), user_id),
+        )
+        connection.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+    return {"status": "ok"}
+
+
 @app.post("/incidents", response_model=Incident, status_code=201)
-def create_incident(incident: IncidentCreate):
+def create_incident(incident: IncidentCreate, _: dict = Depends(require_roles("administrador", "analista"))):
     created_at = datetime.now(timezone.utc).isoformat()
     with closing(connect()) as connection, connection:
         cursor = connection.execute(
@@ -120,81 +411,95 @@ def create_incident(incident: IncidentCreate):
             "VALUES (?, ?, ?, ?, ?)",
             (incident.title, incident.description, incident.severity, incident.status, created_at),
         )
-        row = connection.execute(
-            "SELECT * FROM incidents WHERE id = ?", (cursor.lastrowid,)
-        ).fetchone()
+        row = connection.execute("SELECT * FROM incidents WHERE id = ?", (cursor.lastrowid,)).fetchone()
     return dict(row)
 
 
 @app.patch("/incidents/{incident_id}/status", response_model=Incident)
-def update_incident_status(incident_id: int, update: IncidentStatusUpdate):
+def update_incident_status(
+    incident_id: int,
+    update: IncidentStatusUpdate,
+    user: dict = Depends(require_roles("administrador", "analista")),
+):
     with closing(connect()) as connection, connection:
-        # Lock writers before reading so concurrent changes record the correct previous state.
         connection.execute("BEGIN IMMEDIATE")
-        row = connection.execute(
-            "SELECT * FROM incidents WHERE id = ?", (incident_id,)
-        ).fetchone()
+        row = connection.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Incident not found")
         if row["status"] != update.status:
-            connection.execute(
-                "UPDATE incidents SET status = ? WHERE id = ?",
-                (update.status, incident_id),
-            )
+            connection.execute("UPDATE incidents SET status = ? WHERE id = ?", (update.status, incident_id))
             connection.execute(
                 "INSERT INTO incident_status_history "
-                "(incident_id, previous_status, new_status, changed_at) VALUES (?, ?, ?, ?)",
-                (incident_id, row["status"], update.status, datetime.now(timezone.utc).isoformat()),
+                "(incident_id, previous_status, new_status, changed_at, changed_by) VALUES (?, ?, ?, ?, ?)",
+                (
+                    incident_id,
+                    row["status"],
+                    update.status,
+                    datetime.now(timezone.utc).isoformat(),
+                    user["id"],
+                ),
             )
-        row = connection.execute(
-            "SELECT * FROM incidents WHERE id = ?", (incident_id,)
-        ).fetchone()
+        row = connection.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
     return dict(row)
 
 
 @app.get("/incidents/{incident_id}/history", response_model=list[IncidentStatusHistory])
-def get_incident_history(incident_id: int):
+def get_incident_history(incident_id: int, _: dict = Depends(require_user)):
     with closing(connect()) as connection:
-        incident = connection.execute(
-            "SELECT id FROM incidents WHERE id = ?", (incident_id,)
-        ).fetchone()
+        incident = connection.execute("SELECT id FROM incidents WHERE id = ?", (incident_id,)).fetchone()
         if incident is None:
             raise HTTPException(status_code=404, detail="Incident not found")
         rows = connection.execute(
-            "SELECT * FROM incident_status_history WHERE incident_id = ? ORDER BY id",
+            """
+            SELECT h.*, u.display_name AS changed_by_name
+            FROM incident_status_history h
+            LEFT JOIN users u ON u.id = h.changed_by
+            WHERE h.incident_id = ? ORDER BY h.id
+            """,
             (incident_id,),
         ).fetchall()
     return [dict(row) for row in rows]
 
 
 @app.post("/incidents/{incident_id}/notes", response_model=IncidentNote, status_code=201)
-def create_incident_note(incident_id: int, note: IncidentNoteCreate):
+def create_incident_note(
+    incident_id: int,
+    note: IncidentNoteCreate,
+    user: dict = Depends(require_roles("administrador", "analista")),
+):
     with closing(connect()) as connection, connection:
-        incident = connection.execute(
-            "SELECT id FROM incidents WHERE id = ?", (incident_id,)
-        ).fetchone()
+        incident = connection.execute("SELECT id FROM incidents WHERE id = ?", (incident_id,)).fetchone()
         if incident is None:
             raise HTTPException(status_code=404, detail="Incident not found")
         cursor = connection.execute(
-            "INSERT INTO incident_notes (incident_id, content, created_at) VALUES (?, ?, ?)",
-            (incident_id, note.content, datetime.now(timezone.utc).isoformat()),
+            "INSERT INTO incident_notes (incident_id, content, created_at, created_by) VALUES (?, ?, ?, ?)",
+            (incident_id, note.content, datetime.now(timezone.utc).isoformat(), user["id"]),
         )
         row = connection.execute(
-            "SELECT * FROM incident_notes WHERE id = ?", (cursor.lastrowid,)
+            """
+            SELECT n.*, u.display_name AS created_by_name
+            FROM incident_notes n
+            LEFT JOIN users u ON u.id = n.created_by
+            WHERE n.id = ?
+            """,
+            (cursor.lastrowid,),
         ).fetchone()
     return dict(row)
 
 
 @app.get("/incidents/{incident_id}/notes", response_model=list[IncidentNote])
-def list_incident_notes(incident_id: int):
+def list_incident_notes(incident_id: int, _: dict = Depends(require_user)):
     with closing(connect()) as connection:
-        incident = connection.execute(
-            "SELECT id FROM incidents WHERE id = ?", (incident_id,)
-        ).fetchone()
+        incident = connection.execute("SELECT id FROM incidents WHERE id = ?", (incident_id,)).fetchone()
         if incident is None:
             raise HTTPException(status_code=404, detail="Incident not found")
         rows = connection.execute(
-            "SELECT * FROM incident_notes WHERE incident_id = ? ORDER BY created_at, id",
+            """
+            SELECT n.*, u.display_name AS created_by_name
+            FROM incident_notes n
+            LEFT JOIN users u ON u.id = n.created_by
+            WHERE n.incident_id = ? ORDER BY n.created_at, n.id
+            """,
             (incident_id,),
         ).fetchall()
     return [dict(row) for row in rows]
@@ -204,6 +509,7 @@ def list_incident_notes(incident_id: int):
 def list_incidents(
     status: Literal["open", "investigating", "resolved"] | None = None,
     severity: Literal["low", "medium", "high", "critical"] | None = None,
+    _: dict = Depends(require_user),
 ):
     conditions = []
     parameters = []
@@ -223,11 +529,67 @@ def list_incidents(
 
 
 @app.get("/incidents/{incident_id}", response_model=Incident)
-def get_incident(incident_id: int):
+def get_incident(incident_id: int, _: dict = Depends(require_user)):
     with closing(connect()) as connection:
-        row = connection.execute(
-            "SELECT * FROM incidents WHERE id = ?", (incident_id,)
-        ).fetchone()
+        row = connection.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Incident not found")
     return dict(row)
+
+
+def create_first_admin() -> int:
+    migrate_database()
+    with closing(connect()) as connection:
+        if connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]:
+            print("Ya existen usuarios; el administrador inicial solo se puede crear en una base vacía.", file=sys.stderr)
+            return 1
+    email = input("Correo del administrador: ").strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email) or len(email) > 254:
+        print("Ingresá una dirección de correo válida.", file=sys.stderr)
+        return 1
+    display_name = input("Nombre del administrador: ").strip()
+    if not display_name or len(display_name) > 120:
+        print("El nombre debe contener entre 1 y 120 caracteres.", file=sys.stderr)
+        return 1
+    if sys.stdin.isatty():
+        password_reader = getpass
+    else:
+        password_reader = fallback_getpass
+    password = password_reader("Contraseña (mínimo 12 caracteres): ")
+    confirmation = password_reader("Confirmá la contraseña: ")
+    if len(password) < PASSWORD_MIN_LENGTH or len(password) > 128:
+        print("La contraseña debe contener entre 12 y 128 caracteres.", file=sys.stderr)
+        return 1
+    if password != confirmation:
+        print("Las contraseñas no coinciden.", file=sys.stderr)
+        return 1
+    with closing(connect()) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        if connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]:
+            print("Ya existe un usuario; no se creó otro administrador inicial.", file=sys.stderr)
+            return 1
+        connection.execute(
+            "INSERT INTO users (display_name, email, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
+            (
+                display_name,
+                email,
+                hash_password(password),
+                "administrador",
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+    print(f"Administrador creado: {email}")
+    return 0
+
+
+def run_cli() -> int:
+    parser = argparse.ArgumentParser(description="Herramientas locales de SecurityOps")
+    parser.add_argument("command", choices=("create-admin",), help="crear el primer administrador")
+    arguments = parser.parse_args()
+    if arguments.command == "create-admin":
+        return create_first_admin()
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(run_cli())

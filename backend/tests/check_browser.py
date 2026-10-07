@@ -11,7 +11,7 @@ if __name__ == "__main__":
         fixture.setUp()
         subprocess.run(
             ["node", str(Path(__file__).with_name("browser_smoke.cjs")), fixture.base_url],
-            check=True, timeout=90,
+            check=True, timeout=120,
         )
     finally:
         fixture.doCleanups()

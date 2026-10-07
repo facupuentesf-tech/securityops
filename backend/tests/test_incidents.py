@@ -1,6 +1,8 @@
 import json
 from contextlib import closing
 from datetime import datetime, timedelta
+import hashlib
+import os
 from pathlib import Path
 import socket
 import sqlite3
@@ -9,12 +11,16 @@ import sys
 import tempfile
 import time
 import unittest
+from http.cookiejar import CookieJar
 from urllib.error import HTTPError, URLError
+from urllib.request import HTTPCookieProcessor, build_opener
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
 BACKEND = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BACKEND))
+import main as app_main
 
 
 class IncidentTests(unittest.TestCase):
@@ -22,8 +28,13 @@ class IncidentTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.database = Path(self.directory.name) / "incidents.db"
+        app_main.DATABASE_PATH = self.database
+        self.cookiejar = CookieJar()
+        self.opener = build_opener(HTTPCookieProcessor(self.cookiejar))
+        self.csrf = None
         self.start_server()
         self.addCleanup(self.stop_server)
+        self.seed_admin()
 
     def start_server(self):
         with socket.socket() as listener:
@@ -53,23 +64,56 @@ class IncidentTests(unittest.TestCase):
         self.stop_server()
         self.fail("The server did not start")
 
+    def seed_admin(self):
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute(
+                "INSERT INTO users (display_name, email, password_hash, role, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    "Test Administrator",
+                    "admin@example.test",
+                    app_main.hash_password("correct horse battery"),
+                    "administrador",
+                    "2026-01-01T00:00:00+00:00",
+                ),
+            )
+        code, body = self.request(
+            "POST", "/auth/login",
+            {"email": "admin@example.test", "password": "correct horse battery"},
+        )
+        self.assertEqual(code, 200)
+        self.assertEqual(body["user"]["role"], "administrador")
+        self.csrf = body["csrf_token"]
+
     def stop_server(self):
         if self.server.poll() is None:
             self.server.terminate()
             self.server.wait(timeout=10)
 
-    def request(self, method, path, payload=None):
+    def request(self, method, path, payload=None, client=None, send_csrf=True):
+        opener, csrf = client or (self.opener, self.csrf)
         data = json.dumps(payload).encode() if payload is not None else None
+        headers = {"Content-Type": "application/json"}
+        if send_csrf and csrf and method not in ("GET", "HEAD", "OPTIONS"):
+            headers["X-CSRF-Token"] = csrf
         request = Request(
             self.base_url + path, data=data, method=method,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         )
         try:
-            response = urlopen(request, timeout=2)
+            response = opener.open(request, timeout=2)
         except HTTPError as error:
             response = error
         with response:
             return response.status, json.load(response)
+
+    def login_client(self, email, password):
+        client = (build_opener(HTTPCookieProcessor(CookieJar())), None)
+        code, body = self.request(
+            "POST", "/auth/login", {"email": email, "password": password}, client=client
+        )
+        self.assertEqual(code, 200)
+        return client[0], body["csrf_token"]
 
     def payload(self, **changes):
         return dict(title="Suspicious login", description="Failed login attempts",
@@ -240,6 +284,8 @@ class IncidentTests(unittest.TestCase):
         self.assertEqual(ids, sorted(set(ids)))
         for entry in history:
             self.assertEqual(entry["incident_id"], incident["id"])
+            self.assertEqual(entry["changed_by"], 1)
+            self.assertEqual(entry["changed_by_name"], "Test Administrator")
             timestamp = datetime.fromisoformat(entry["changed_at"].replace("Z", "+00:00"))
             self.assertEqual(timestamp.utcoffset(), timedelta(0))
         self.assertEqual(self.request("GET", f'/incidents/{other["id"]}/history'), (200, []))
@@ -272,7 +318,13 @@ class IncidentTests(unittest.TestCase):
             """)
         request = Request(self.base_url + path + "/status", method="PATCH",
                           data=json.dumps({"status": "resolved"}).encode(),
-                          headers={"Content-Type": "application/json"})
+                          headers={
+                              "Content-Type": "application/json",
+                              "X-CSRF-Token": self.csrf,
+                              "Cookie": "; ".join(
+                                  f"{cookie.name}={cookie.value}" for cookie in self.cookiejar
+                              ),
+                          })
         with self.assertRaises(HTTPError) as caught:
             urlopen(request, timeout=2)
         self.assertEqual(caught.exception.code, 500)
@@ -283,20 +335,6 @@ class IncidentTests(unittest.TestCase):
             connection.execute("DROP TRIGGER reject_history")
         self.assertEqual(self.request("PATCH", path + "/status", {"status": "resolved"})[0], 200)
         self.assertEqual(len(self.request("GET", path + "/history")[1]), 1)
-
-    def test_history_table_added_to_existing_database(self):
-        _, incident = self.request("POST", "/incidents", self.payload())
-        self.stop_server()
-        # Reproduce the schema before history existed, retaining incident data.
-        with closing(sqlite3.connect(self.database)) as connection, connection:
-            connection.execute("DROP TABLE incident_status_history")
-        self.start_server()
-        path = f'/incidents/{incident["id"]}'
-        self.assertEqual(self.request("GET", path), (200, incident))
-        self.assertEqual(self.request("GET", path + "/history"), (200, []))
-        self.assertEqual(self.request("PATCH", path + "/status", {"status": "investigating"})[0], 200)
-        entry = self.request("GET", path + "/history")[1][0]
-        self.assertEqual((entry["previous_status"], entry["new_status"]), ("open", "investigating"))
 
     def test_notes_creation_listing_and_persistence(self):
         _, incident = self.request("POST", "/incidents", self.payload())
@@ -309,6 +347,8 @@ class IncidentTests(unittest.TestCase):
         self.assertGreater(note["id"], 0)
         self.assertEqual(note["incident_id"], incident["id"])
         self.assertEqual(note["content"], content)
+        self.assertEqual(note["created_by"], 1)
+        self.assertEqual(note["created_by_name"], "Test Administrator")
         timestamp = datetime.fromisoformat(note["created_at"].replace("Z", "+00:00"))
         self.assertEqual(timestamp.utcoffset(), timedelta(0))
         self.assertEqual(self.request("GET", path), (200, [note]))
@@ -362,19 +402,251 @@ class IncidentTests(unittest.TestCase):
         with closing(sqlite3.connect(self.database)) as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM incident_notes").fetchone()[0], 0)
 
-    def test_notes_table_added_preserving_incidents_and_history(self):
-        _, incident = self.request("POST", "/incidents", self.payload())
-        path = f'/incidents/{incident["id"]}'
-        _, updated = self.request("PATCH", path + "/status", {"status": "investigating"})
-        _, history = self.request("GET", path + "/history")
+    def test_versioned_migrations_preserve_legacy_incidents_history_and_notes(self):
         self.stop_server()
+        self.database.unlink()
         with closing(sqlite3.connect(self.database)) as connection, connection:
-            connection.execute("DROP TABLE incident_notes")
+            connection.executescript("""
+                CREATE TABLE incidents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+                    description TEXT NOT NULL CHECK (length(trim(description)) > 0),
+                    severity TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high', 'critical')),
+                    status TEXT NOT NULL CHECK (status IN ('open', 'investigating', 'resolved')),
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE incident_status_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    incident_id INTEGER NOT NULL REFERENCES incidents(id),
+                    previous_status TEXT NOT NULL,
+                    new_status TEXT NOT NULL,
+                    changed_at TEXT NOT NULL
+                );
+                CREATE TABLE incident_notes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    incident_id INTEGER NOT NULL REFERENCES incidents(id),
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                INSERT INTO incidents VALUES (17, 'Legacy incident', 'Existing data', 'high', 'investigating', '2025-01-01T00:00:00+00:00');
+                INSERT INTO incident_status_history VALUES (8, 17, 'open', 'investigating', '2025-01-02T00:00:00+00:00');
+                INSERT INTO incident_notes VALUES (9, 17, 'Legacy note', '2025-01-03T00:00:00+00:00');
+            """)
         self.start_server()
-        self.assertEqual(self.request("GET", path), (200, updated))
-        self.assertEqual(self.request("GET", path + "/history"), (200, history))
-        self.assertEqual(self.request("GET", path + "/notes"), (200, []))
-        self.assertEqual(self.request("POST", path + "/notes", {"content": "Legacy incident note"})[0], 201)
+        self.opener = build_opener(HTTPCookieProcessor(CookieJar()))
+        self.seed_admin()
+        self.assertEqual(self.request("GET", "/incidents/17")[0], 200)
+        self.assertEqual(self.request("GET", "/incidents/17/history")[1][0]["id"], 8)
+        self.assertEqual(self.request("GET", "/incidents/17/notes")[1][0]["id"], 9)
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertEqual(
+                connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(),
+                [(1,), (2,)],
+            )
+            self.assertEqual(
+                connection.execute("SELECT changed_by FROM incident_status_history WHERE id = 8").fetchone()[0],
+                None,
+            )
+
+    def test_authentication_cookie_csrf_and_logout(self):
+        with closing(sqlite3.connect(self.database)) as connection:
+            password_hash = connection.execute(
+                "SELECT password_hash FROM users WHERE email = 'admin@example.test'"
+            ).fetchone()[0]
+        self.assertTrue(password_hash.startswith("scrypt$"))
+        self.assertTrue(app_main.verify_password("correct horse battery", password_hash))
+        self.assertFalse(app_main.verify_password("incorrect password", password_hash))
+        session_cookie = next(cookie for cookie in self.cookiejar if cookie.name == "securityops_session")
+        self.assertTrue(session_cookie.has_nonstandard_attr("HttpOnly"))
+        self.assertEqual(session_cookie.get_nonstandard_attr("SameSite").lower(), "strict")
+        self.assertEqual(self.request("GET", "/auth/session")[1]["user"]["email"], "admin@example.test")
+        self.assertEqual(
+            self.request("POST", "/incidents", self.payload(), send_csrf=False)[0], 403
+        )
+        self.assertEqual(self.request("POST", "/auth/logout")[0], 200)
+        self.assertEqual(self.request("GET", "/incidents")[0], 401)
+
+    def test_expired_session_is_rejected(self):
+        cookie = next(cookie for cookie in self.cookiejar if cookie.name == "securityops_session")
+        token_hash = hashlib.sha256(cookie.value.encode("utf-8")).hexdigest()
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("UPDATE sessions SET expires_at = 0 WHERE token_hash = ?", (token_hash,))
+        self.assertEqual(self.request("GET", "/incidents")[0], 401)
+
+    def test_protected_endpoints_reject_anonymous_requests(self):
+        anonymous = (build_opener(HTTPCookieProcessor(CookieJar())), None)
+        for method, path, payload in (
+            ("GET", "/incidents", None),
+            ("GET", "/incidents/1", None),
+            ("GET", "/incidents/1/history", None),
+            ("GET", "/incidents/1/notes", None),
+            ("POST", "/incidents", self.payload()),
+            ("PATCH", "/incidents/1/status", {"status": "resolved"}),
+            ("GET", "/users", None),
+        ):
+            with self.subTest(method=method, path=path):
+                self.assertEqual(self.request(method, path, payload, client=anonymous)[0], 401)
+        self.assertEqual(self.request("GET", "/health", client=anonymous), (200, {"status": "ok"}))
+
+    def test_role_permissions_and_admin_user_management(self):
+        created = self.request(
+            "POST", "/users",
+            {
+                "display_name": "Analyst",
+                "email": "analyst@example.test",
+                "password": "analyst password 123",
+                "role": "analista",
+            },
+        )
+        self.assertEqual(created[0], 201)
+        analyst = self.login_client("analyst@example.test", "analyst password 123")
+        incident_code, incident = self.request(
+            "POST", "/incidents", self.payload(), client=analyst
+        )
+        self.assertEqual(incident_code, 201)
+        path = f'/incidents/{incident["id"]}'
+        self.assertEqual(
+            self.request("PATCH", path + "/status", {"status": "investigating"}, client=analyst)[0],
+            200,
+        )
+        self.assertEqual(
+            self.request("POST", path + "/notes", {"content": "Analyst note"}, client=analyst)[0],
+            201,
+        )
+        self.assertEqual(self.request("GET", "/users", client=analyst)[0], 403)
+
+        self.assertEqual(self.request(
+            "POST", "/users",
+            {
+                "display_name": "Reader",
+                "email": "reader@example.test",
+                "password": "reader password 123",
+                "role": "lector",
+            },
+        )[0], 201)
+        reader = self.login_client("reader@example.test", "reader password 123")
+        for route in ("/incidents", path, path + "/history", path + "/notes"):
+            self.assertEqual(self.request("GET", route, client=reader)[0], 200)
+        self.assertEqual(self.request("POST", "/incidents", self.payload(), client=reader)[0], 403)
+        self.assertEqual(
+            self.request("PATCH", path + "/status", {"status": "resolved"}, client=reader)[0],
+            403,
+        )
+        self.assertEqual(
+            self.request("POST", path + "/notes", {"content": "No access"}, client=reader)[0],
+            403,
+        )
+        self.assertEqual(self.request("POST", "/users", {}, client=reader)[0], 403)
+
+        analyst_id = created[1]["id"]
+        updated_analyst = self.request(
+            "PATCH",
+            f"/users/{analyst_id}",
+            {
+                "display_name": "Updated Analyst",
+                "email": "updated-analyst@example.test",
+                "role": "lector",
+            },
+        )
+        self.assertEqual(updated_analyst[0], 200)
+        self.assertEqual(updated_analyst[1]["display_name"], "Updated Analyst")
+        self.assertEqual(updated_analyst[1]["email"], "updated-analyst@example.test")
+        self.assertEqual(updated_analyst[1]["role"], "lector")
+        self.assertEqual(
+            self.request("PATCH", f"/users/{analyst_id}", {"is_active": False})[0], 200
+        )
+        self.assertEqual(self.request("GET", "/incidents", client=analyst)[0], 401)
+
+    def test_admin_user_password_reset_and_last_admin_guard(self):
+        self.assertEqual(
+            self.request("PATCH", "/users/1", {"is_active": False})[0], 409
+        )
+        _, user = self.request(
+            "POST", "/users",
+            {
+                "display_name": "Temporary Reader",
+                "email": "temporary@example.test",
+                "password": "temporary password 123",
+                "role": "lector",
+            },
+        )
+        old_password_client = self.login_client("temporary@example.test", "temporary password 123")
+        self.assertEqual(
+            self.request(
+                "POST", f'/users/{user["id"]}/password', {"password": "replacement pass 123"}
+            )[0],
+            200,
+        )
+        self.assertEqual(self.request("GET", "/auth/session", client=old_password_client)[1]["user"], None)
+        bad_client = (build_opener(HTTPCookieProcessor(CookieJar())), None)
+        self.assertEqual(self.request(
+            "POST", "/auth/login",
+            {"email": "temporary@example.test", "password": "temporary password 123"},
+            client=bad_client,
+        )[0], 401)
+        replacement_client = self.login_client("temporary@example.test", "replacement pass 123")
+        self.assertEqual(
+            self.request("GET", "/auth/session", client=replacement_client)[1]["user"]["id"],
+            user["id"],
+        )
+
+    def test_login_rejects_invalid_credentials_and_disabled_accounts(self):
+        client = (build_opener(HTTPCookieProcessor(CookieJar())), None)
+        self.assertEqual(self.request(
+            "POST", "/auth/login",
+            {"email": "admin@example.test", "password": "incorrect password"},
+            client=client,
+        )[0], 401)
+        _, analyst = self.request(
+            "POST", "/users",
+            {
+                "display_name": "Disabled",
+                "email": "disabled@example.test",
+                "password": "disabled account pass",
+                "role": "lector",
+            },
+        )
+        self.request("PATCH", f'/users/{analyst["id"]}', {"is_active": False})
+        disabled_client = (build_opener(HTTPCookieProcessor(CookieJar())), None)
+        self.assertEqual(self.request(
+            "POST", "/auth/login",
+            {"email": "disabled@example.test", "password": "disabled account pass"},
+            client=disabled_client,
+        )[0], 401)
+
+    def test_local_bootstrap_command_creates_only_first_admin(self):
+        database = Path(self.directory.name) / "bootstrap.db"
+        environment = os.environ.copy()
+        environment["SECURITYOPS_DATABASE"] = str(database)
+        result = subprocess.run(
+            [sys.executable, str(BACKEND / "main.py"), "create-admin"],
+            input=(
+                "bootstrap@example.test\n"
+                "Bootstrap Admin\n"
+                "a unique bootstrap password\n"
+                "a unique bootstrap password\n"
+            ),
+            text=True,
+            capture_output=True,
+            env=environment,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with closing(sqlite3.connect(database)) as connection:
+            user = connection.execute(
+                "SELECT email, role, password_hash FROM users"
+            ).fetchone()
+            self.assertEqual(user[0:2], ("bootstrap@example.test", "administrador"))
+            self.assertTrue(app_main.verify_password("a unique bootstrap password", user[2]))
+            self.assertNotIn("a unique bootstrap password", user[2])
+        duplicate = subprocess.run(
+            [sys.executable, str(BACKEND / "main.py"), "create-admin"],
+            text=True,
+            capture_output=True,
+            env=environment,
+            timeout=30,
+        )
+        self.assertEqual(duplicate.returncode, 1)
 
     def test_persistence_after_process_restart(self):
         code, incident = self.request("POST", "/incidents", self.payload())

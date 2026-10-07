@@ -2,106 +2,127 @@
 
 ## Overview
 
-The first functional version is a local web application. One Uvicorn process
+SecurityOps is a local, single-organization web application. One Uvicorn process
 hosts FastAPI, serves the HTML/CSS/JavaScript interface and exposes the JSON API.
-The backend reads and writes a persistent SQLite file using Python's `sqlite3`.
-There is no separate frontend server, build step or external database service.
+The backend uses SQLite through Python's `sqlite3`; there is no separate frontend
+server or external database service.
 
 ## Architecture
 
 ```text
-Browser (Spanish HTML/CSS/JavaScript interface)
+Browser (Spanish interface)
        |
-       | Local HTTP, relative API paths
+       | Same-origin HTTP, opaque HttpOnly session cookie
        v
 Uvicorn on 127.0.0.1:8000
        |
        v
 FastAPI (backend/main.py)
-       |-- GET /: backend/static/index.html
-       |-- /static: styles.css and app.js
-       |-- /docs: interactive API documentation
-       |-- /health and incident endpoints
+       |-- /: login and incident/user interface
+       |-- /static: CSS and JavaScript
+       |-- /docs: API schema
+       |-- /auth: login, session and logout
+       |-- /users: administrator-only management
+       |-- /incidents: role-protected operations
        |
-       | sqlite3, parameterized SQL
+       | sqlite3, bound query parameters, SQL migrations
        v
-backend/securityops.db
-       |-- incidents
-       |-- incident_status_history
-       |-- incident_notes
+SQLite database (default: backend/securityops.db)
+       |-- incidents, incident_status_history, incident_notes
+       |-- users, sessions, schema_migrations
 ```
+
+## Authentication and Authorization
+
+Passwords are salted with Python's `hashlib.scrypt` (N=16384, r=8, p=1).
+Successful login issues a cryptographically random opaque token; only its
+SHA-256 digest is stored in SQLite. Sessions expire after 12 hours and are
+revalidated against the active user on each protected request. The cookie is
+`HttpOnly`, `SameSite=Strict`, scoped to `/`, and `Secure` on HTTPS. Logout
+deletes the server-side session. Deactivation and password reset invalidate
+the affected user's active sessions.
+
+Authenticated mutating requests must supply the session's `X-CSRF-Token`.
+The frontend keeps that token in memory, not in browser storage. Role checks
+run in FastAPI dependencies for every protected API operation:
+
+| Operation | Administrador | Analista | Lector |
+| --- | --- | --- | --- |
+| Read incidents, history and notes | Yes | Yes | Yes |
+| Create incidents, change status, add notes | Yes | Yes | No |
+| List/create/update/deactivate users, reset passwords | Yes | No | No |
+
+`POST /auth/login` is the only public account operation. The initial
+administrator is created through the interactive local command
+`python backend/main.py create-admin`; no default password or public signup
+exists. The root page and static assets are public so the login UI can load.
+`/health` and `/docs` are also public; protected business data and operations
+are not.
 
 ## Frontend
 
-`backend/static/index.html` provides the list, incident creation form and detail
-view. `styles.css` adapts the layout to desktop and mobile widths. `app.js`
-calls the same-origin API through relative paths and renders user content using
-`textContent`, without interpreting it as HTML.
+`backend/static/index.html` contains the login form, incident list/detail and
+administrator user panel. `styles.css` adapts layouts to desktop and mobile.
+`app.js` calls same-origin routes, sends the CSRF header for mutations and
+renders user-provided content with `textContent`.
 
-The interface supports status/severity filters, descriptions, state changes,
-history and investigation notes. It communicates loading, empty lists, success
-and errors. UTC timestamps from the API are formatted with `Intl.DateTimeFormat`
-in the browser's timezone.
+The interface hides actions unavailable to a role for clarity, but this is not
+the security boundary: FastAPI enforces the same permissions independently.
+UTC timestamps are displayed in the browser's timezone. Administrators can
+create users, change display name/email/role, deactivate accounts and reset
+passwords.
 
-## Backend and API
+## API
 
-FastAPI routes and Pydantic models currently live in `backend/main.py`.
-The models validate strings, allowed severity/status values and note length.
-Uvicorn serves the application. Runtime dependencies are in
-`backend/requirements.txt`; SQLite support comes from Python's standard library.
-
-| Method | Route | Behavior |
+| Method | Route | Access |
 | --- | --- | --- |
-| GET | `/health` | Health response |
-| POST | `/incidents` | Create incident |
-| GET | `/incidents` | List with optional status/severity filters |
-| GET | `/incidents/{incident_id}` | Incident detail |
-| PATCH | `/incidents/{incident_id}/status` | Status update and history |
-| GET | `/incidents/{incident_id}/history` | Read status history |
-| POST | `/incidents/{incident_id}/notes` | Add investigation note |
-| GET | `/incidents/{incident_id}/notes` | Read investigation notes |
+| GET | `/health` | Public |
+| POST | `/auth/login` | Public |
+| GET | `/auth/session` | Public; reports the current session when present |
+| POST | `/auth/logout` | Authenticated |
+| GET, POST | `/users` | Administrator |
+| PATCH | `/users/{user_id}` | Administrator |
+| POST | `/users/{user_id}/password` | Administrator |
+| POST | `/incidents` | Administrator, analyst |
+| GET | `/incidents` | Any authenticated user |
+| GET | `/incidents/{incident_id}` | Any authenticated user |
+| PATCH | `/incidents/{incident_id}/status` | Administrator, analyst |
+| GET | `/incidents/{incident_id}/history` | Any authenticated user |
+| POST | `/incidents/{incident_id}/notes` | Administrator, analyst |
+| GET | `/incidents/{incident_id}/notes` | Any authenticated user |
 
-Creation endpoints return `201`; successful reads and status updates return
-`200`. Validation errors return `422` and nonexistent incidents return `404`
-after request validation. `/docs` exposes the API schema and examples can be
-executed there. The web page route is excluded from the API schema.
+Authenticated reads require the session cookie. All authenticated mutations
+also require the matching CSRF header. `/docs` documents the API; its protected
+operations still require a valid session and CSRF token when mutating data.
 
-## Data Lifecycle and Transactions
+## Data Lifecycle and Migrations
 
-At startup, the FastAPI lifespan handler creates missing tables and indexes
-with `IF NOT EXISTS`. It does not delete or recreate the database. The database
-path is resolved relative to `main.py`, independent of the working directory,
-and database files are excluded from Git.
+The SQLite path defaults to a location relative to `main.py`; set
+`SECURITYOPS_DATABASE` to override it. Database files are excluded from Git.
+Connections enable foreign keys and close after use.
 
-Connections enable foreign keys and are closed after use. Status changes use
-`BEGIN IMMEDIATE` before reading the current state, serializing writers. The
-status update and its history entry are committed together; an error rolls
-back both. Resending the same state creates no history entry. Notes are stored
-separately and do not alter the incident or its status history.
-
-See [database-design.md](database-design.md) for fields, constraints and ordering.
+Numbered SQL files in `backend/migrations` are applied in order and recorded in
+`schema_migrations`. Migration 001 creates the incident schema if absent.
+Migration 002 adds users, sessions and nullable actor references for status
+history and notes. The upgrade preserves existing incident information and
+does not invent actors for historical records. Status changes and their history
+entries remain atomic; concurrent writers are serialized with `BEGIN IMMEDIATE`.
 
 ## Local Scope and Security Boundaries
 
-The documented launch command binds to `127.0.0.1`. This version has no
-authentication, users, roles, permissions or company isolation. Any client that
-can reach the API can read and modify incident data. Validation, parameterized
-SQL and safe text rendering are implemented, but access control is future work.
-There is no publication or shared deployment configured.
+This release is for one local organization and binds to `127.0.0.1`. It does
+not have organization records, tenant isolation, shared deployment
+configuration, rate limiting or a general audit log. Multi-organization
+support must include explicit tenant scoping before any shared deployment.
+It is not safe to expose this local prototype to an untrusted network.
 
-## Verification
+## Verification and Future Work
 
-The unittest suite runs a real local HTTP server against a temporary SQLite
-database. It covers API behavior, validation, ordering, persistence across
-restarts, additive table creation, transaction rollback and web asset delivery.
-An optional Node.js script drives headless Chrome via its local DevTools protocol
-to exercise UI flows at desktop and mobile widths. See the README for commands
-and environment requirements.
+The unittest suite exercises a local HTTP server with a temporary SQLite
+database, including authentication, permissions, migration of legacy data,
+incident workflows and session persistence. An optional Node.js/Chrome smoke
+test exercises the authenticated interface at desktop and mobile widths.
 
-## Future Architecture
-
-The original layered web-application direction is preserved. React, PostgreSQL
-and Docker are candidates for later stages. Separating backend modules,
-introducing schema migrations and adding authentication, permission enforcement
-and company isolation are future work. The broader roadmap includes users,
-assets, risks, controls, general auditing, reports and dashboards.
+Assets, risks, controls, tenant isolation, general audit logs, reports and
+dashboards remain future work. React, PostgreSQL and Docker are possible later
+choices.

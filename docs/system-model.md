@@ -18,12 +18,13 @@ reopening a resolved incident; there are no transition restrictions beyond
 validating the value.
 
 A **status-history entry** belongs to one incident and records the previous
-state, new state and UTC time of an effective change. Repeating the current
-state does not create another entry. History starts with changes made through
-the implemented feature and does not record incident creation or identify an actor.
+state, new state, UTC time and authenticated actor for an effective change.
+Repeating the current state does not create another entry. History entries
+created before migration 002 keep a null actor; past activity is not reconstructed.
 
-An **investigation note** belongs to one incident and contains text, an ID and
-a UTC creation time. Notes can be created and listed, not edited or deleted.
+An **investigation note** belongs to one incident and contains text, an ID, a
+UTC creation time and (for new notes) its authenticated author. Notes can be
+created and listed, not edited or deleted.
 Their content is trimmed and limited to 1–5000 characters. They do not change
 the incident's status or its history.
 
@@ -31,58 +32,46 @@ Each incident has zero or more history entries and notes. Both collections are
 persistent in SQLite; existing incidents without entries return empty lists.
 History is ordered by ID, and notes by creation time with ID as a tiebreaker.
 
+An **account** has a display name, unique email, scrypt password hash, active
+flag and exactly one of three roles. Administrators create and manage accounts;
+there is no public registration. A first administrator is bootstrapped only by
+the local interactive command `python backend/main.py create-admin`, before
+any user exists.
+
+An **authenticated session** is represented by a random opaque token held in an
+`HttpOnly`, `SameSite=Strict` cookie. SQLite stores only its SHA-256 digest and
+an expiry (12 hours). Each protected API request rechecks the active account
+and its current role. State-changing requests also require the session's CSRF
+token. Logout, account deactivation and password reset invalidate sessions.
+
+The implemented role permissions are:
+
+| Operation | Administrador | Analista | Lector |
+| --- | --- | --- | --- |
+| Read incidents, history and notes | Yes | Yes | Yes |
+| Create incidents, change status, add notes | Yes | Yes | No |
+| Manage users and reset passwords | Yes | No | No |
+
 The HTML/CSS/JavaScript interface is in Spanish, calls the FastAPI API and
-formats dates in the browser's timezone. This version runs locally and has no
-authentication, user accounts, permissions or organization isolation.
+formats dates in the browser's timezone. UI visibility reflects role
+permissions, but access is enforced by the backend. The deployment is local
+and supports one organization; no tenant isolation is implemented.
 
 ## Original Domain Vision: Future Work
 
-The following entities and relationships preserve the original vision. Users,
-roles, permissions, assets, risks, controls and general audit logs are not yet
-implemented. Responsible users and asset links for incidents are also future work.
+The following entities and relationships preserve the original vision.
+Organizations/multi-tenancy, assets, risks, controls and general audit logs are
+not yet implemented. Responsible users and asset links for incidents are also
+future work.
 
 The planned domain entities are:
 
-- Users
-- Roles
-- Permissions
+- Organizations / tenant isolation
 - Assets
 - Risks
 - Security Controls
 - Incidents
 - Audit Logs
-
-### Users
-
-Users are individuals who can access the SecurityOps platform.
-
-Each user belongs to an organization and has one or more roles.
-
-### Roles
-
-Roles define what actions a user can perform within the platform.
-
-Initial roles:
-
-- Administrator
-- Security Manager
-- Auditor
-- Employee
-
-### Permissions
-
-Permissions define specific actions that users can perform.
-
-Examples:
-
-- Create user
-- Modify user
-- Delete user
-- View assets
-- Create risk
-- Modify risk
-- View incidents
-- Create incident
 
 ### Assets
 
