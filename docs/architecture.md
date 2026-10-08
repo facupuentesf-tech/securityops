@@ -19,18 +19,20 @@ Uvicorn on 127.0.0.1:8000
        |
        v
 FastAPI (backend/main.py)
-       |-- /: login and incident/user interface
+       |-- /: login and incident/asset/user interface
        |-- /static: CSS and JavaScript
        |-- /docs: API schema
        |-- /auth: login, session and logout
        |-- /users: administrator-only management
        |-- /incidents: role-protected operations
+       |-- /assets: organization-scoped creation and queries
        |
        | sqlite3, bound query parameters, SQL migrations
        v
 SQLite database (default: backend/securityops.db)
        |-- organizations, users, sessions
        |-- incidents, incident_status_history, incident_notes
+       |-- assets
        |-- schema_migrations
 ```
 
@@ -52,6 +54,8 @@ run in FastAPI dependencies for every protected API operation:
 | --- | --- | --- | --- |
 | Read incidents, history and notes | Yes | Yes | Yes |
 | Create incidents, change status, add notes | Yes | Yes | No |
+| Read assets | Yes | Yes | Yes |
+| Create assets | Yes | Yes | No |
 | List/create/update/deactivate users, reset passwords | Yes | No | No |
 
 `POST /auth/login` is the only public account operation. The initial
@@ -66,13 +70,14 @@ are not.
 
 The authenticated user's `organization_id`, loaded from the user row on every
 request, supplies the tenant scope. The API never accepts an organization ID
-for users or incidents, and administrator user-management operations are
+for users, incidents or assets, and administrator user-management operations are
 restricted to that organization. Cross-organization identifiers return `404`.
 
 ## Frontend
 
-`backend/static/index.html` contains the login form, incident list/detail and
-administrator user panel. `styles.css` adapts layouts to desktop and mobile.
+`backend/static/index.html` contains the login form, incident list/detail,
+asset list/filter/create/detail section and administrator user panel.
+`styles.css` adapts layouts to desktop and mobile.
 `app.js` calls same-origin routes, sends the CSRF header for mutations and
 renders user-provided content with `textContent`.
 
@@ -101,6 +106,9 @@ changed through the API.
 | GET | `/incidents/{incident_id}/history` | Any authenticated user |
 | POST | `/incidents/{incident_id}/notes` | Administrator, analyst |
 | GET | `/incidents/{incident_id}/notes` | Any authenticated user |
+| POST | `/assets` | Administrator, analyst; returns 201 |
+| GET | `/assets` | Any authenticated user; optional type/criticality filters with AND |
+| GET | `/assets/{asset_id}` | Any authenticated user; foreign organization IDs return 404 |
 
 Authenticated reads require the session cookie. All authenticated mutations
 also require the matching CSRF header. `/docs` documents the API; its protected
@@ -121,6 +129,7 @@ password hashes, history and notes remain intact. Organization columns are
 required by database triggers and foreign keys. The upgrade does not invent
 actors for historical records. Status changes and their history entries remain
 atomic; concurrent writers are serialized with `BEGIN IMMEDIATE`.
+Migration 004 adds assets and indexes without changing existing tables or data.
 
 ## Local Scope and Security Boundaries
 
@@ -133,8 +142,8 @@ untrusted network.
 
 The unittest suite exercises a local HTTP server with a temporary SQLite
 database, including authentication, permissions, migration of legacy data,
-incident workflows and session persistence. An optional Node.js/Chrome smoke
+incident and asset workflows, tenant isolation and persistence. An optional Node.js/Chrome smoke
 test exercises the authenticated interface at desktop and mobile widths.
 
-Assets, risks, controls, general audit logs, reports and dashboards remain
+Asset editing, deletion and incident links, risks, controls, general audit logs, reports and dashboards remain
 future work. React, PostgreSQL and Docker are possible later choices.

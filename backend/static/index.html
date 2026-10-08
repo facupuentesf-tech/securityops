@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SecurityOps · Incidentes</title>
+  <title>SecurityOps · Incidentes y activos</title>
   <link rel="stylesheet" href="/static/styles.css">
   <script src="/static/app.js" defer></script>
 </head>
 <body>
-  <header class="topbar"><a class="brand" href="/"> <span class="brand-icon">S</span> SecurityOps</a><span class="environment">Entorno local · una organización</span><span id="account" class="account" hidden><span id="account-name"></span><button id="logout-button" class="secondary" type="button">Cerrar sesión</button></span><a href="/docs">Documentación API ↗</a></header>
+  <header class="topbar"><a class="brand" href="/"> <span class="brand-icon">S</span> SecurityOps</a><span class="environment">Entorno local · organizaciones aisladas</span><span id="account" class="account" hidden><span id="account-name"></span><button id="logout-button" class="secondary" type="button">Cerrar sesión</button></span><a href="/docs">Documentación API ↗</a></header>
   <main>
     <section id="login-view" class="panel auth-panel" aria-labelledby="login-heading" hidden>
       <p class="eyebrow">ACCESO LOCAL</p><h1 id="login-heading">Iniciar sesión</h1>
@@ -53,6 +53,33 @@
           <section class="panel"><h2>Notas de investigación</h2><p class="muted">Documentá los avances de la investigación.</p><form id="note-form"><label>Nueva nota<textarea name="content" rows="4" required placeholder="Agregá un hallazgo o una acción realizada."></textarea></label><small class="muted">Entre 1 y 5000 caracteres, sin contar espacios en los extremos.</small><button type="submit">Agregar nota</button></form><p id="notes-feedback" class="muted" role="status"></p><ol id="notes-list" class="notes"></ol></section>
         </div>
       </div>
+    </section>
+    <section id="assets-view" aria-labelledby="assets-heading">
+      <div class="page-heading"><div><p class="eyebrow">INVENTARIO</p><h1 id="assets-heading">Activos</h1><p class="muted">Consultá los recursos tecnológicos de tu organización.</p></div><button id="new-asset-button" type="button">+ Nuevo activo</button></div>
+      <section id="asset-create-panel" class="panel" aria-labelledby="asset-create-heading" hidden>
+        <div class="section-heading"><h2 id="asset-create-heading">Registrar activo</h2><button id="cancel-asset-create" class="secondary" type="button">Cancelar</button></div>
+        <form id="asset-create-form">
+          <label>Nombre<input name="name" required placeholder="Nombre del recurso"></label>
+          <div class="form-row"><label>Tipo<select name="type"><option value="hardware">Hardware</option><option value="software">Software</option><option value="service">Servicio</option><option value="data">Datos</option></select></label><label>Criticidad<select name="criticality"><option value="low">Baja</option><option value="medium" selected>Media</option><option value="high">Alta</option><option value="critical">Crítica</option></select></label></div>
+          <label>Descripción (opcional)<textarea name="description" rows="4" placeholder="Describí el recurso."></textarea></label>
+          <button type="submit">Crear activo</button>
+        </form>
+      </section>
+      <section id="asset-list-panel" class="panel" aria-labelledby="asset-list-heading">
+        <div class="section-heading"><h2 id="asset-list-heading">Registro de activos</h2><span id="asset-count" class="muted"></span></div>
+        <form id="asset-filter-form" class="filters"><label>Tipo<select name="type"><option value="">Todos los tipos</option><option value="hardware">Hardware</option><option value="software">Software</option><option value="service">Servicio</option><option value="data">Datos</option></select></label><label>Criticidad<select name="criticality"><option value="">Todas las criticidades</option><option value="low">Baja</option><option value="medium">Media</option><option value="high">Alta</option><option value="critical">Crítica</option></select></label><button type="submit" class="secondary">Aplicar filtros</button><button id="clear-asset-filters" type="button" class="text-button">Limpiar</button></form>
+        <p id="asset-list-feedback" class="empty" role="status"></p>
+        <div id="asset-list" class="incident-list"></div>
+      </section>
+      <section id="asset-detail-panel" class="panel" aria-labelledby="asset-detail-name" hidden>
+        <button id="asset-back-button" type="button" class="text-button">← Volver a activos</button>
+        <p id="asset-detail-feedback" class="empty" role="status"></p>
+        <div id="asset-detail-content" hidden>
+          <p id="asset-detail-id" class="eyebrow"></p><h2 id="asset-detail-name" tabindex="-1"></h2>
+          <p id="asset-detail-date" class="muted"></p><p id="asset-detail-type"></p><span id="asset-detail-criticality" class="badge"></span>
+          <h3>Descripción</h3><p id="asset-detail-description" class="user-text"></p>
+        </div>
+      </section>
     </section>
     <section id="users-view" class="panel" aria-labelledby="users-heading" hidden>
       <div class="section-heading"><div><h2 id="users-heading">Usuarios</h2><p class="muted">Creá cuentas y asigná un rol. Desactivar una cuenta revoca su acceso.</p></div><button id="reload-users" class="secondary" type="button">Actualizar</button></div>

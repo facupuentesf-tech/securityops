@@ -193,6 +193,22 @@ class PasswordReset(BaseModel):
     password: Password
 
 
+class AssetCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    type: Literal["hardware", "software", "service", "data"]
+    description: str | None = None
+    criticality: Literal["low", "medium", "high", "critical"]
+
+
+class Asset(AssetCreate):
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    created_at: datetime
+
+
 class IncidentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -423,6 +439,60 @@ def reset_user_password(
         )
         connection.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
     return {"status": "ok"}
+
+
+@app.post("/assets", response_model=Asset, status_code=201)
+def create_asset(
+    asset: AssetCreate,
+    user: dict = Depends(require_roles("administrador", "analista")),
+):
+    created_at = datetime.now(timezone.utc).isoformat()
+    with closing(connect()) as connection, connection:
+        cursor = connection.execute(
+            "INSERT INTO assets (organization_id, name, type, description, criticality, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (user["organization_id"], asset.name, asset.type, asset.description,
+             asset.criticality, created_at),
+        )
+        row = connection.execute(
+            "SELECT * FROM assets WHERE id = ? AND organization_id = ?",
+            (cursor.lastrowid, user["organization_id"]),
+        ).fetchone()
+    return dict(row)
+
+
+@app.get("/assets", response_model=list[Asset])
+def list_assets(
+    type: Literal["hardware", "software", "service", "data"] | None = None,
+    criticality: Literal["low", "medium", "high", "critical"] | None = None,
+    user: dict = Depends(require_user),
+):
+    conditions = ["organization_id = ?"]
+    parameters = [user["organization_id"]]
+    if type is not None:
+        conditions.append("type = ?")
+        parameters.append(type)
+    if criticality is not None:
+        conditions.append("criticality = ?")
+        parameters.append(criticality)
+    with closing(connect()) as connection:
+        rows = connection.execute(
+            "SELECT * FROM assets WHERE " + " AND ".join(conditions) + " ORDER BY id",
+            parameters,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.get("/assets/{asset_id}", response_model=Asset)
+def get_asset(asset_id: int, user: dict = Depends(require_user)):
+    with closing(connect()) as connection:
+        row = connection.execute(
+            "SELECT * FROM assets WHERE id = ? AND organization_id = ?",
+            (asset_id, user["organization_id"]),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    return dict(row)
 
 
 @app.post("/incidents", response_model=Incident, status_code=201)

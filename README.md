@@ -9,7 +9,7 @@ controles de seguridad e incidentes en una única plataforma.
 
 ## Primera versión funcional
 
-Aplicación local para registrar e investigar incidentes de seguridad, con
+Aplicación local para registrar activos e investigar incidentes de seguridad, con
 inicio de sesión, permisos verificados por la API y aislamiento de datos entre
 organizaciones. El servidor escucha únicamente en `127.0.0.1`; esta versión
 sigue siendo un prototipo local, sin publicación ni despliegue para uso
@@ -18,6 +18,7 @@ compartido.
 ### Funciones implementadas
 
 - Crear, listar y consultar incidentes.
+- Crear, listar y consultar activos, con filtros por tipo y criticidad combinados con AND.
 - Filtrar por estado y severidad, individualmente o combinados.
 - Cambiar el estado y consultar su historial persistente.
 - Agregar y consultar notas de investigación.
@@ -27,7 +28,7 @@ compartido.
   nombre/correo/rol, desactivar cuentas y restablecer contraseñas.
 - Tres roles comprobados en cada operación del backend: administrador,
   analista y lector.
-- Organizaciones locales con usuarios e incidentes aislados por organización;
+- Organizaciones locales con usuarios, incidentes y activos aislados por organización;
   el servidor obtiene la organización desde la sesión autenticada.
 - Historial de estados y notas nuevos atribuidos al usuario que los generó.
 - Interfaz en español adaptable a computadora y celular, con fechas locales
@@ -41,6 +42,8 @@ compartido.
 | --- | --- | --- | --- |
 | Consultar incidentes, historial y notas | Sí | Sí | Sí |
 | Crear incidentes, cambiar estado y agregar notas | Sí | Sí | No |
+| Consultar activos | Sí | Sí | Sí |
+| Crear activos | Sí | Sí | No |
 | Gestionar usuarios (crear, editar, desactivar y restablecer contraseña) | Sí | No | No |
 
 Los cambios existentes anteriores a las migraciones mantienen su contenido,
@@ -52,13 +55,51 @@ su contraseña.
 
 Aún no están implementados:
 
-- Inventario de activos
+- Edición, eliminación y asignación de responsables de activos
 - Gestión de riesgos
 - Controles de seguridad
 - Ampliación de incidentes con responsables y activos relacionados
 - Auditoría general más allá del historial de incidentes
 - Reportes
 - Dashboard
+
+## Activos: creación y consulta
+
+La sección **Activos** permite listar recursos, filtrar por tipo y criticidad,
+registrarlos y abrir el detalle pulsando su nombre. Administradores y analistas
+pueden crear; lectores solo consultan. Incidentes y usuarios siguen disponibles.
+
+| Método | Ruta | Comportamiento |
+| --- | --- | --- |
+| POST | `/assets` | Crea un activo, devuelve `201`; requiere sesión y CSRF |
+| GET | `/assets` | Lista por ID; filtros opcionales `type` y `criticality` con AND |
+| GET | `/assets/{asset_id}` | Detalle; `404` para IDs inexistentes o de otra organización |
+
+Ejemplo de cuerpo de creación:
+
+```json
+{"name":"Servidor principal","type":"hardware","description":"Servidor de aplicaciones","criticality":"high"}
+```
+
+El nombre es obligatorio, se recorta y no puede quedar vacío. Tipos admitidos:
+`hardware`, `software`, `service`, `data`; criticidad: `low`, `medium`, `high`,
+`critical`. La descripción es opcional: omitida o null se almacena como null.
+El servidor asigna ID, organización y fecha UTC. Los campos extra, incluido
+`organization_id`, y los filtros inválidos devuelven `422`. Sin coincidencias,
+el listado devuelve `[]`. No hay edición, eliminación ni vínculo con incidentes.
+
+Para comprobarlo manualmente:
+
+1. Iniciar la API con el comando de la sección siguiente e ingresar como
+   administrador o analista. Crear un activo con espacios alrededor del nombre
+   y sin descripción; abrir el detalle y comprobar nombre recortado y fecha local.
+2. Crear otros tipos y criticidades. Aplicar cada filtro y ambos juntos;
+   comprobar una combinación sin coincidencias y usar **Limpiar**.
+3. Ingresar como lector: consultar listado y detalle; no debe aparecer
+   **Nuevo activo**. La API también debe rechazar su creación con `403`.
+4. Ingresar con una cuenta de otra organización: no debe ver los activos
+   anteriores y consultar sus IDs en la API debe devolver `404`.
+5. Reiniciar la API y comprobar que los activos siguen disponibles.
 
 ## Tecnologías
 
@@ -285,7 +326,8 @@ y agregarlas no modifica el incidente ni su historial de estados.
 Las migraciones numeradas viven en `backend/migrations` y se aplican en orden
 al iniciar la API o al ejecutar cualquiera de los comandos locales. La migración
 003 agrega organizaciones y asocia los datos existentes a la organización inicial
-sin borrar tablas ni invalidar sesiones vigentes. Antes de actualizar, detener
+sin borrar tablas ni invalidar sesiones vigentes. La migración 004 crea `assets`
+e índices por organización sin modificar los datos existentes. Antes de actualizar, detener
 la API y hacer una copia de la base activa.
 
 El aislamiento multi-organización se implementa en esta etapa, pero la aplicación
@@ -318,6 +360,10 @@ orden cronológico y desempate por ID, `404`, persistencia tras reiniciar y
 creación de la tabla conservando incidentes e historial existentes.
 También se comprueba que `/`, los archivos CSS/JavaScript y `/docs` se sirvan
 correctamente.
+Para activos se verifican creación, recorte de nombre, descripción opcional,
+fechas UTC, tipos y criticidades, consultas, filtros individuales y combinados,
+validaciones, SQL parametrizado, CSRF, roles, aislamiento en ambas direcciones
+entre dos organizaciones, preservación de datos al migrar y persistencia tras reiniciar.
 
 Comprobación opcional de la interfaz, usando Node.js 24 y Chrome instalado,
 con una base temporal (sin dependencias npm). Busca Chrome en `PATH` y en las
@@ -338,6 +384,9 @@ renderizado seguro de textos con etiquetas HTML y ausencia de desbordamiento
 horizontal a 1280 y 390 píxeles. Esta comprobación requiere que el entorno
 permita iniciar Chrome y conectarse a su puerto local de depuración; no sustituye
 una revisión manual en un celular físico.
+La comprobación también incluye activos: creación y detalle, nombre vacío,
+filtros, listas vacías, recuperación de errores de red, textos seguros, fechas
+locales y controles de creación ocultos para lectores.
 
 ## Documentación del proyecto
 
@@ -350,5 +399,6 @@ una revisión manual en un celular físico.
 ## Estado
 
 Prototipo funcional local con autenticación, permisos y aislamiento entre
-organizaciones. Activos, riesgos, controles, auditoría general, reportes y
-dashboard continúan pendientes.
+organizaciones, con creación y consulta de activos. Edición y eliminación de
+activos, vinculación con incidentes, riesgos, controles, auditoría general,
+reportes y dashboard continúan pendientes.

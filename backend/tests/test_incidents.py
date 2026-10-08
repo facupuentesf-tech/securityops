@@ -442,7 +442,7 @@ class IncidentTests(unittest.TestCase):
         with closing(sqlite3.connect(self.database)) as connection:
             self.assertEqual(
                 connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(),
-                [(1,), (2,), (3,)],
+                [(1,), (2,), (3,), (4,)],
             )
             self.assertEqual(
                 connection.execute("SELECT organization_id FROM incidents WHERE id = 17").fetchone()[0],
@@ -988,6 +988,155 @@ class IncidentTests(unittest.TestCase):
             )[0],
             422,
         )
+
+    def asset_payload(self, **changes):
+        return dict(name="Application server", type="hardware", criticality="high") | changes
+
+    def test_assets_creation_lookup_and_optional_description(self):
+        self.assertEqual(self.request("GET", "/assets"), (200, []))
+        before = datetime.now().astimezone()
+        code, asset = self.request("POST", "/assets", self.asset_payload(name=" \tServidor\n "))
+        self.assertEqual(code, 201)
+        self.assertEqual(asset["name"], "Servidor")
+        self.assertIsNone(asset["description"])
+        self.assertNotIn("organization_id", asset)
+        created_at = datetime.fromisoformat(asset["created_at"].replace("Z", "+00:00"))
+        self.assertEqual(created_at.utcoffset(), timedelta(0))
+        self.assertGreaterEqual(created_at, before)
+        self.assertEqual(self.request("GET", f'/assets/{asset["id"]}'), (200, asset))
+        self.assertEqual(self.request("GET", "/assets"), (200, [asset]))
+        for description in (None, "", "<script>alert(1)</script>", "O'Brien'); DROP TABLE assets; --"):
+            with self.subTest(description=description):
+                code, result = self.request("POST", "/assets", self.asset_payload(
+                    name="O'Brien'); DROP TABLE assets; --", description=description,
+                ))
+                self.assertEqual(code, 201)
+                self.assertEqual(result["description"], description)
+                self.assertEqual(self.request("GET", f'/assets/{result["id"]}'), (200, result))
+        self.assertEqual(self.request("GET", "/assets/999999")[0], 404)
+        self.assertEqual(self.request("GET", "/assets/not-an-id")[0], 422)
+
+    def test_assets_filters_and_allowed_values(self):
+        assets = []
+        for asset_type in ("hardware", "software", "service", "data"):
+            for criticality in ("low", "medium", "high", "critical"):
+                code, asset = self.request("POST", "/assets", self.asset_payload(
+                    type=asset_type, criticality=criticality,
+                ))
+                self.assertEqual(code, 201)
+                assets.append(asset)
+        self.assertEqual(self.request("GET", "/assets"), (200, assets))
+        for filters in ({"type": "software"}, {"criticality": "critical"},
+                        {"type": "data", "criticality": "low"}):
+            with self.subTest(filters=filters):
+                expected = [asset for asset in assets if all(asset[key] == value for key, value in filters.items())]
+                self.assertEqual(self.request("GET", "/assets?" + urlencode(filters)), (200, expected))
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("DELETE FROM assets WHERE type = 'data' AND criticality = 'low'")
+        self.assertEqual(self.request("GET", "/assets?type=data&criticality=low"), (200, []))
+
+    def test_assets_validation(self):
+        invalid = [{}]
+        for key in ("name", "type", "criticality"):
+            missing = self.asset_payload()
+            del missing[key]
+            invalid.append(missing)
+        for value in ("", "  ", "\t\n", "\u2003", None, 1, True, [], {}):
+            invalid.append(self.asset_payload(name=value))
+        for key in ("type", "criticality"):
+            for value in ("", "invalid", "HIGH", " hardware ", None, 1, [], {}):
+                invalid.append(self.asset_payload(**{key: value}))
+        for value in (1, True, [], {}):
+            invalid.append(self.asset_payload(description=value))
+        invalid.extend([self.asset_payload(organization_id=1), self.asset_payload(id=42),
+                        self.asset_payload(created_at="2020-01-01T00:00:00Z")])
+        for payload in invalid:
+            with self.subTest(payload=payload):
+                self.assertEqual(self.request("POST", "/assets", payload)[0], 422)
+        for key in ("type", "criticality"):
+            for value in ("invalid", "", "x'); DROP TABLE assets; --"):
+                with self.subTest(key=key, value=value):
+                    self.assertEqual(self.request("GET", "/assets?" + urlencode({key: value}))[0], 422)
+        self.assertEqual(self.request("GET", "/assets"), (200, []))
+
+    def test_assets_permissions_and_csrf(self):
+        anonymous = (build_opener(HTTPCookieProcessor(CookieJar())), None)
+        for method, path, payload in (("GET", "/assets", None), ("GET", "/assets/1", None),
+                                      ("POST", "/assets", self.asset_payload())):
+            self.assertEqual(self.request(method, path, payload, client=anonymous)[0], 401)
+        self.assertEqual(self.request("POST", "/assets", self.asset_payload(), send_csrf=False)[0], 403)
+        self.assertEqual(self.request("POST", "/assets", self.asset_payload(),
+                                      client=(self.opener, "invalid-csrf"))[0], 403)
+        for role in ("analista", "lector"):
+            self.assertEqual(self.request("POST", "/users", {
+                "display_name": role, "email": f"{role}@example.test",
+                "password": "asset user password", "role": role,
+            })[0], 201)
+        analyst = self.login_client("analista@example.test", "asset user password")
+        reader = self.login_client("lector@example.test", "asset user password")
+        code, asset = self.request("POST", "/assets", self.asset_payload(), client=analyst)
+        self.assertEqual(code, 201)
+        self.assertEqual(self.request("POST", "/assets", self.asset_payload(), client=reader)[0], 403)
+        for client in (analyst, reader):
+            self.assertEqual(self.request("GET", "/assets", client=client), (200, [asset]))
+            self.assertEqual(self.request("GET", f'/assets/{asset["id"]}', client=client), (200, asset))
+
+    def test_assets_organization_isolation(self):
+        environment = os.environ.copy()
+        environment["SECURITYOPS_DATABASE"] = str(self.database)
+        created = subprocess.run(
+            [sys.executable, str(BACKEND / "main.py"), "create-organization"],
+            input="Asset tenant\nasset-admin@example.test\nAsset Admin\nasset admin password\nasset admin password\n",
+            text=True, capture_output=True, env=environment, timeout=30,
+        )
+        self.assertEqual(created.returncode, 0, created.stderr)
+        second = self.login_client("asset-admin@example.test", "asset admin password")
+        self.assertEqual(self.request("GET", "/assets", client=second), (200, []))
+        local = self.request("POST", "/assets", self.asset_payload())[1]
+        foreign = self.request("POST", "/assets", self.asset_payload(), client=second)[1]
+        for client, own, other in (((self.opener, self.csrf), local, foreign), (second, foreign, local)):
+            self.assertEqual(self.request("GET", f'/assets/{other["id"]}', client=client)[0], 404)
+            self.assertEqual(self.request("GET", f'/assets/{own["id"]}', client=client), (200, own))
+            for query in ("", "?type=hardware", "?criticality=high", "?type=hardware&criticality=high"):
+                self.assertEqual(self.request("GET", "/assets" + query, client=client), (200, [own]))
+            self.assertEqual(self.request("GET", "/assets?type=data", client=client), (200, []))
+            self.assertEqual(self.request("POST", "/assets", self.asset_payload(organization_id=1), client=client)[0], 422)
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertEqual(connection.execute("SELECT organization_id FROM assets ORDER BY id").fetchall(), [(1,), (2,)])
+
+    def test_assets_migration_preservation_and_persistence(self):
+        incident = self.request("POST", "/incidents", self.payload())[1]
+        self.request("PATCH", f'/incidents/{incident["id"]}/status', {"status": "investigating"})
+        self.request("POST", f'/incidents/{incident["id"]}/notes', {"content": "Preserved note"})
+        self.stop_server()
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("DROP TABLE assets")
+            connection.execute("DELETE FROM schema_migrations WHERE version = 4")
+            tables = ("organizations", "users", "sessions", "incidents", "incident_status_history", "incident_notes")
+            before = {table: connection.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() for table in tables}
+        self.start_server()
+        with closing(sqlite3.connect(self.database)) as connection:
+            after = {table: connection.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() for table in tables}
+            self.assertEqual(before, after)
+            self.assertEqual(connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(), [(1,), (2,), (3,), (4,)])
+        code, asset = self.request("POST", "/assets", self.asset_payload(description="Persistent asset"))
+        self.assertEqual(code, 201)
+        self.stop_server()
+        self.start_server()
+        self.assertEqual(self.request("GET", "/assets"), (200, [asset]))
+        self.assertEqual(self.request("GET", f'/assets/{asset["id"]}'), (200, asset))
+        self.assertEqual(self.request("GET", f'/incidents/{incident["id"]}')[1]["status"], "investigating")
+        with closing(app_main.connect()) as connection:
+            self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
+            for changes in ({"organization_id": None}, {"organization_id": 99999},
+                            {"name": " "}, {"type": "invalid"}, {"criticality": "invalid"}):
+                values = dict(organization_id=1, name="DB asset", type="hardware", criticality="high", created_at=asset["created_at"]) | changes
+                with self.subTest(changes=changes), self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(
+                        "INSERT INTO assets (organization_id, name, type, criticality, created_at) VALUES (?, ?, ?, ?, ?)",
+                        tuple(values.values()),
+                    )
+                connection.rollback()
 
     def test_persistence_after_process_restart(self):
         code, incident = self.request("POST", "/incidents", self.payload())

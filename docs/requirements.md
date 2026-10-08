@@ -29,17 +29,38 @@ and backend-enforced role-based permissions.
   organization and its first administrator in one transaction. It prompts for
   organization name, account details and a new password; it does not provide
   default credentials or a public registration route.
-- Every user and incident belongs to an organization. The server derives the
+- Every user, incident and asset belongs to an organization. The server derives the
   organization from the authenticated account; request payloads cannot set or
   change the association. Incident list/filter/detail/status/history/note
-  operations and user administration are scoped to that organization.
+  operations, asset operations and user administration are scoped to that organization.
 - Identifiers belonging to another organization return `404`, just like
   nonexistent identifiers.
 - Roles are singular and fixed to `administrador`, `analista` and `lector`.
   Administrators manage users and perform all incident operations. Analysts
   read/create incidents, change status and add notes. Readers can only read
-  incidents, history and notes. These checks apply to API operations regardless
+  incidents, history, notes and assets. Administrators and analysts can create
+  assets. These checks apply to API operations regardless
   of interface visibility.
+
+### Asset API and Interface
+
+- `POST /assets` returns `201` with ID, name, type, optional description,
+  criticality and UTC creation timestamp. Administrators and analysts can create.
+- Name is a required string, trimmed before storage; whitespace-only names
+  are rejected. Type is `hardware`, `software`, `service` or `data`.
+- Criticality is required: `low`, `medium`, `high` or `critical`.
+- Description can be omitted, null or a string; omitted values become null.
+- Payloads with extra fields, including `organization_id`, return `422`.
+- `GET /assets` returns assets ordered by ID in the authenticated organization.
+  Optional `type` and `criticality` filters combine with AND; no matches returns `[]`.
+- `GET /assets/{asset_id}` returns the asset or `404` for missing or foreign IDs.
+- All three roles can query assets. Anonymous requests return `401`; reader
+  creation and missing/invalid CSRF tokens return `403`. Invalid fields or
+  filter values return `422`. SQL uses bound parameters.
+- The Spanish Assets section provides list, filters, creation and detail,
+  hides creation for readers, renders text safely, adapts to mobile widths and
+  shows loading, empty, success and error feedback.
+- Migration 004 preserves existing data. Assets survive server restarts.
 
 ### Incident API
 
@@ -75,7 +96,8 @@ and backend-enforced role-based permissions.
 ### Interface and Persistence
 
 - `GET /` serves a Spanish-language interface responsive to desktop and mobile
-  widths; it supports login, incident operations and administrator user management.
+  widths; it supports login, incident operations, asset creation/queries and
+  administrator user management.
 - Dates are displayed in the browser's timezone. User text is rendered through
   `textContent`; API calls use relative paths.
 - The interface communicates loading, empty results, success and errors.
@@ -90,13 +112,14 @@ and backend-enforced role-based permissions.
 
 ## Original Requirements: Future Work
 
-Assets, risks, controls, general audit logs and shared deployment remain
+Asset extensions, risks, controls, general audit logs and shared deployment remain
 future work. Multi-organization data isolation is implemented, but this remains
 a local prototype bound to `127.0.0.1` and is not intended for shared deployment.
 
-### 1. Assets
+### 1. Asset extensions
 
-The system must allow organizations to register and manage their technological assets.
+Creation and queries are implemented. Editing, deletion, responsible-person
+assignment and linking assets to incidents remain future work.
 
 Examples:
 

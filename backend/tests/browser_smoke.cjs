@@ -73,21 +73,52 @@ async function poll(fn) {
   assert.equal(await evaluate(`document.querySelector('#notes-list img') === null && !window.xss`),true);
   assert.equal(await evaluate(`document.querySelector('#notes-list time').textContent === new Intl.DateTimeFormat('es',{dateStyle:'medium',timeStyle:'short'}).format(new Date(document.querySelector('#notes-list time').dateTime))`),true);
   await evaluate(`document.getElementById('back-button').click()`);
-  await wait(`document.querySelectorAll('.incident').length === 1`);
+  await wait(`document.querySelectorAll('#incident-list .incident').length === 1`);
   await evaluate(`document.getElementById('filter-form').elements.status.value='resolved';document.getElementById('filter-form').requestSubmit()`);
   await wait(`document.getElementById('list-feedback').textContent.includes('coincidan')`);
   await evaluate(`const f=document.getElementById('filter-form');f.elements.status.value='investigating';f.elements.severity.value='high';f.requestSubmit()`);
-  await wait(`document.querySelectorAll('.incident').length === 1`);
+  await wait(`document.querySelectorAll('#incident-list .incident').length === 1`);
   await command('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
   assert.equal(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`),true);
-  await evaluate(`document.querySelector('.incident-title').click()`);
+  await evaluate(`document.querySelector('#incident-list .incident-title').click()`);
   await wait(`document.getElementById('notes-list').children.length === 1 && !document.getElementById('detail-content').hidden`);
   assert.equal(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`),true);
   // Exercise the network failure message, then restore and retry.
   await evaluate(`window.originalFetch=window.fetch;window.fetch=async()=>{throw new TypeError('offline')};document.getElementById('back-button').click()`);
   await wait(`document.getElementById('list-feedback').textContent.includes('No se pudo conectar')`);
   await evaluate(`window.fetch=window.originalFetch;document.getElementById('filter-form').requestSubmit()`);
-  await wait(`document.querySelectorAll('.incident').length === 1`);
+  await wait(`document.querySelectorAll('#incident-list .incident').length === 1`);
+  // Asset creation, safe rendering, filters, details and network recovery.
+  await wait(`document.getElementById('asset-list-feedback').textContent.includes('Todavía')`);
+  await evaluate(`document.getElementById('new-asset-button').click()`);
+  await evaluate(`document.getElementById('asset-create-form').elements.name.value='   ';document.getElementById('asset-create-form').requestSubmit()`);
+  await wait(`document.getElementById('message').textContent.includes('nombre del activo')`);
+  await evaluate(`(() => {const f=document.getElementById('asset-create-form');f.elements.name.value=${JSON.stringify('  '+payload+'  ')};f.elements.type.value='service';f.elements.criticality.value='critical';f.elements.description.value=${JSON.stringify(payload)};f.requestSubmit();})()`);
+  await wait(`!document.getElementById('asset-detail-content').hidden`);
+  assert.equal(await evaluate(`document.getElementById('asset-detail-name').textContent`),payload);
+  assert.equal(await evaluate(`document.getElementById('asset-detail-description').textContent`),payload);
+  assert.equal(await evaluate(`document.querySelector('#asset-detail-content img') === null && !window.xss`),true);
+  assert.equal(await evaluate(`document.querySelector('#asset-detail-date time').textContent === new Intl.DateTimeFormat('es',{dateStyle:'medium',timeStyle:'short'}).format(new Date(document.querySelector('#asset-detail-date time').dateTime))`),true);
+  assert.equal(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`),true);
+  await evaluate(`document.getElementById('asset-back-button').click()`);
+  await wait(`document.querySelectorAll('#asset-list .asset').length === 1`);
+  assert.equal(await evaluate(`document.querySelector('#asset-list img') === null && !window.xss`),true);
+  await evaluate(`document.getElementById('asset-filter-form').elements.type.value='hardware';document.getElementById('asset-filter-form').requestSubmit()`);
+  await wait(`document.getElementById('asset-list-feedback').textContent.includes('coincidan')`);
+  await evaluate(`(() => {const f=document.getElementById('asset-filter-form');f.elements.type.value='service';f.elements.criticality.value='critical';f.requestSubmit();})()`);
+  await wait(`document.querySelectorAll('#asset-list .asset').length === 1`);
+  await evaluate(`window.fetch=async()=>{throw new TypeError('offline')};document.getElementById('asset-filter-form').requestSubmit()`);
+  await wait(`document.getElementById('asset-list-feedback').textContent.includes('No se pudo conectar')`);
+  await evaluate(`window.fetch=window.originalFetch;document.getElementById('clear-asset-filters').click()`);
+  await wait(`document.querySelectorAll('#asset-list .asset').length === 1`);
+  await evaluate(`window.fetch=async()=>{throw new TypeError('offline')};document.querySelector('.asset-name').click()`);
+  await wait(`document.getElementById('asset-detail-feedback').textContent.includes('No se pudo conectar')`);
+  await evaluate(`window.fetch=window.originalFetch;document.querySelector('#asset-detail-feedback button').click()`);
+  await wait(`!document.getElementById('asset-detail-content').hidden`);
+  await evaluate(`document.getElementById('asset-back-button').click()`);
+  await wait(`document.querySelectorAll('#asset-list .asset').length === 1`);
+  await command('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
+  assert.equal(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`),true);
   const docs=await fetch(base+'/docs');assert.equal(docs.status,200);
   await evaluate(`(() => {const f=document.getElementById('user-create-form');f.elements.display_name.value='Smoke Reader';f.elements.email.value='smoke-reader@example.test';f.elements.password.value='smoke reader password';f.elements.role.value='lector';f.requestSubmit();})()`);
   await wait(`document.getElementById('user-list').textContent.includes('smoke-reader@example.test')`);
@@ -95,7 +126,7 @@ async function poll(fn) {
   await wait(`document.getElementById('login-view').hidden === false`);
   await evaluate(`(() => {const f=document.getElementById('login-form');f.elements.email.value='smoke-reader@example.test';f.elements.password.value='smoke reader password';f.requestSubmit();})()`);
   try {
-    await wait(`document.getElementById('account-name').textContent.includes('Lector') && document.querySelectorAll('.incident').length === 1`);
+    await wait(`document.getElementById('account-name').textContent.includes('Lector') && document.querySelectorAll('#incident-list .incident').length === 1`);
   } catch (error) {
     console.error('Reader UI state:', await evaluate(`JSON.stringify({
       login: document.getElementById('login-feedback').textContent,
@@ -106,10 +137,14 @@ async function poll(fn) {
     throw error;
   }
   assert.equal(await evaluate(`document.getElementById('new-button').hidden && document.getElementById('users-view').hidden`),true);
-  await evaluate(`document.querySelector('.incident-title').click()`);
+  await wait(`document.querySelectorAll('#asset-list .asset').length === 1`);
+  assert.equal(await evaluate(`document.getElementById('new-asset-button').hidden && document.getElementById('asset-create-panel').hidden`),true);
+  await evaluate(`document.querySelector('.asset-name').click()`);
+  await wait(`!document.getElementById('asset-detail-content').hidden`);
+  await evaluate(`document.querySelector('#incident-list .incident-title').click()`);
   await wait(`document.getElementById('detail-content').hidden === false`);
   assert.equal(await evaluate(`document.getElementById('status-form').hidden && document.getElementById('note-form').hidden`),true);
-  console.log('OK: login/logout, administración de usuarios, lector, incidentes, historial, notas, filtros, XSS, fechas locales, errores de red, /docs y anchos 1280/390.');
+  console.log('OK: login/logout, administración de usuarios, lector, incidentes, activos, historial, notas, filtros, XSS, fechas locales, errores de red, /docs y anchos 1280/390.');
   await command('Browser.close');
 })().catch(error => { console.error(error);process.exitCode=1; }).finally(async () => {
   if(socket && socket.readyState===WebSocket.OPEN) {

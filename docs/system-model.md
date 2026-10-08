@@ -32,6 +32,13 @@ Each incident has zero or more history entries and notes. Both collections are
 persistent in SQLite; existing incidents without entries return empty lists.
 History is ordered by ID, and notes by creation time with ID as a tiebreaker.
 
+An **asset** belongs to one organization and has an ID, trimmed nonempty name,
+type (`hardware`, `software`, `service`, `data`), optional description,
+criticality (`low`, `medium`, `high`, `critical`) and UTC creation timestamp.
+Administrators and analysts create assets; all authenticated roles can list,
+filter and view details. Type and criticality filters combine with AND.
+Editing, deletion, ownership assignment and incident links are future work.
+
 An **account** has a display name, unique email, scrypt password hash, active
 flag, exactly one of three roles and belongs to one organization. Administrators
 create and manage accounts only in their own organization; there is no public
@@ -40,10 +47,10 @@ registration. The initial administrator is bootstrapped with
 organizations and their initial administrators are created locally with
 `python backend/main.py create-organization`.
 
-An **organization** owns its users and incidents. The authenticated user's
+An **organization** owns its users, incidents and assets. The authenticated user's
 organization is loaded by the server from the account record on each request;
 the client cannot choose or change it. Incident list/filter/detail/status,
-history, notes and user administration are all organization-scoped. Attempts
+history, notes, asset operations and user administration are all organization-scoped. Attempts
 to access identifiers belonging to another organization return `404`.
 
 An **authenticated session** is represented by a random opaque token held in an
@@ -58,6 +65,8 @@ The implemented role permissions are:
 | --- | --- | --- | --- |
 | Read incidents, history and notes | Yes | Yes | Yes |
 | Create incidents, change status, add notes | Yes | Yes | No |
+| Read assets | Yes | Yes | Yes |
+| Create assets | Yes | Yes | No |
 | Manage users and reset passwords | Yes | No | No |
 
 The HTML/CSS/JavaScript interface is in Spanish, calls the FastAPI API and
@@ -69,21 +78,22 @@ for shared deployment.
 ## Original Domain Vision: Future Work
 
 The following entities and relationships preserve the original vision.
-Assets, risks, controls and general audit logs are not yet implemented.
+Asset extensions, risks, controls and general audit logs are not yet implemented.
 Responsible users and asset links for incidents are also future work.
 
 The planned domain entities are:
 
-- Organizations / tenant isolation (implemented for users and incidents)
-- Assets
+- Organizations / tenant isolation (implemented for users, incidents and assets)
+- Assets (creation and queries implemented; extensions planned)
 - Risks
 - Security Controls
 - Incidents
 - Audit Logs
 
-### Assets
+### Asset extensions
 
-Assets represent technological resources belonging to an organization.
+Asset creation and queries are implemented. Editing, deletion, ownership and
+incident links remain planned. Assets represent technological resources belonging to an organization.
 
 Examples:
 

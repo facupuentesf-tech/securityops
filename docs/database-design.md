@@ -6,7 +6,7 @@ The local version uses SQLite, by default at `backend/securityops.db`. The
 default path is relative to the backend module and can be overridden with
 `SECURITYOPS_DATABASE`. Numbered SQL migrations in `backend/migrations` are
 tracked in `schema_migrations`; database files are excluded from Git.
-Migrations 001–003 preserve existing incident, history, note, user and session
+Migrations 001–004 preserve existing incident, history, note, user and session
 data while assigning existing users and incidents to the initial organization.
 
 ## Implemented Schema
@@ -22,6 +22,26 @@ data while assigning existing users and incidents to the initial organization.
 Migration 003 creates `Organización inicial` and associates all pre-existing
 users and incidents with it. The local `create-organization` command creates
 additional organizations together with their first administrator.
+
+### assets
+
+| Field | SQLite type | Constraints and meaning |
+| --- | --- | --- |
+| `id` | INTEGER | Primary key, autoincrement |
+| `organization_id` | INTEGER | Required foreign key to `organizations.id` |
+| `name` | TEXT | Required, nonempty trimmed text; API strips surrounding whitespace |
+| `type` | TEXT | Required: `hardware`, `software`, `service`, `data` |
+| `description` | TEXT | Optional, nullable; omitted values are stored as null |
+| `criticality` | TEXT | Required: `low`, `medium`, `high`, `critical` |
+| `created_at` | TEXT | Required, application-generated UTC ISO 8601 timestamp |
+
+Migration 004 adds this table and indexes on `(organization_id, id)`,
+`(organization_id, type, id)` and `(organization_id, criticality, id)` without
+altering existing tables or data. Assets are listed by ascending ID. Type and
+criticality filters combine with AND and use bound SQL parameters within the
+authenticated organization. Asset response models omit the internal organization
+ID; creation rejects client-supplied associations. Editing, deletion, ownership
+assignment and incident links remain future work.
 
 ### incidents
 
@@ -117,7 +137,8 @@ Migration 001 creates incident tables and indexes if absent. Migration 002
 creates users/sessions and adds nullable actor foreign keys. Migration 003
 creates organizations, assigns old users/incidents to the initial organization
 and adds organization indexes and required-association triggers. Each migration
-runs in a transaction and is applied only once.
+runs in a transaction and is applied only once. Migration 004 adds assets and
+their organization-scoped indexes.
 
 ### Relationships and Persistence
 
@@ -128,12 +149,12 @@ Incidents, history and notes have no delete endpoints. User deletion is not
 exposed; sessions cascade only if a user row is deleted outside the API. All
 input values in SQL queries are passed as parameters. Dates are stored as TEXT in UTC and
 returned as datetime values in the API; the interface displays them in the
-browser's timezone. Incident, history and note data survive server restarts.
+browser's timezone. Incident, history, note and asset data survive server restarts.
 
 ## Domain entities still planned
 
-Assets, risks, controls and general audit logs remain future work.
-Multi-organization isolation is implemented for the current incident and user
+Asset editing, deletion and incident links, risks, controls and general audit logs remain future work.
+Multi-organization isolation is implemented for the current asset, incident and user
 operations. Proposed incident fields such as `asset_id` and `assigned_to`
 are not columns in the current `incidents` table. PostgreSQL remains a possible
 later database.
@@ -141,25 +162,15 @@ later database.
 The planned entities are:
 
 - Organizations (implemented)
-- Assets
+- Assets (creation and queries implemented; extensions planned)
 - Risks
 - Security Controls
 - Audit Logs
 
-### Assets
+### Asset extensions
 
-Represents technological resources belonging to an organization.
-
-Main fields:
-
-- id
-- organization_id
-- name
-- type
-- description
-- criticality
-- owner_id
-- created_at
+Editing, deletion, an `owner_id` association and links to incidents are planned.
+They are not present in the current schema or API.
 
 ### Risks
 

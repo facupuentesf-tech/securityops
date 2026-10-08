@@ -53,17 +53,18 @@ maintainability.
 
 ## Implemented Scope
 
-The current version is a local, multi-organization incident-management
+The current version is a local, multi-organization incident and asset management
 prototype with server-enforced tenant isolation. It provides:
 
 - Incident creation, listing, detail and optional status/severity filters.
+- Asset creation, listing and detail with optional type/criticality filters.
 - Status changes with persistent history recorded atomically with the update.
 - Investigation notes with validation and persistent storage.
 - User login/logout, scrypt password hashes, opaque server-side sessions in
   `HttpOnly` cookies and CSRF protection for state-changing requests.
 - Administrator-managed user accounts and backend-enforced administrator,
   analyst and reader permissions.
-- Organization-scoped users and incidents; the organization is derived from
+- Organization-scoped users, incidents and assets; the organization is derived from
   the authenticated account and cannot be selected through the API.
 - Local commands to bootstrap the initial organization or create another
   organization together with its first administrator.
@@ -74,7 +75,8 @@ prototype with server-enforced tenant isolation. It provides:
 
 The application runs locally through Uvicorn on `127.0.0.1`. Migration 003
 assigns all existing users and incidents to an initial organization and
-preserves existing sessions, history and notes. Existing history and notes are
+preserves existing sessions, history and notes. Migration 004 adds assets without
+altering existing data. Existing history and notes are
 preserved but cannot be attributed to users retroactively. Incident status
 history is still a specific incident feature, not the general audit module
 envisioned below. Shared deployment is not implemented or supported.
@@ -84,7 +86,7 @@ envisioned below. Shared deployment is not implemented or supported.
 The original project roadmap is preserved. Beyond the initial incident module,
 the following capabilities remain future work:
 
-1. Asset management
+1. Asset editing, deletion, ownership assignment and links to incidents
 2. Risk management
 3. Security controls
 4. Extended incident management with responsible users and related assets

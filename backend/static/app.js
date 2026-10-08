@@ -3,6 +3,9 @@ const $ = (id) => document.getElementById(id);
 const statuses = {open: "Abierto", investigating: "En investigación", resolved: "Resuelto"};
 const severities = {low: "Baja", medium: "Media", high: "Alta", critical: "Crítica"};
 const roles = {administrador: "Administrador", analista: "Analista", lector: "Lector"};
+const assetTypes = {hardware: "Hardware", software: "Software", service: "Servicio", data: "Datos"};
+let assetListVersion = 0;
+let assetDetailVersion = 0;
 const dateFormat = new Intl.DateTimeFormat("es", {dateStyle: "medium", timeStyle: "short"});
 let selectedId = null;
 let listVersion = 0;
@@ -32,6 +35,14 @@ function showLogin() {
   selectedId = null;
   ++listVersion;
   ++detailVersion;
+  ++assetListVersion;
+  ++assetDetailVersion;
+  $("asset-list").replaceChildren();
+  $("asset-detail-content").hidden = true;
+  $("asset-create-form").reset();
+  $("asset-filter-form").reset();
+  $("asset-list-panel").hidden = false;
+  $("asset-detail-panel").hidden = true;
   $("account").hidden = true;
   $("app-view").hidden = true;
   $("login-view").hidden = false;
@@ -53,6 +64,9 @@ function showApplication(session) {
   $("account-name").textContent = `${currentUser.display_name} · ${roles[currentUser.role]}`;
   const canWrite = currentUser.role !== "lector";
   $("new-button").hidden = !canWrite;
+  $("new-asset-button").hidden = !canWrite;
+  $("asset-create-panel").hidden = true;
+  loadAssets();
   $("create-panel").hidden = true;
   $("status-form").hidden = !canWrite;
   $("note-form").hidden = !canWrite;
@@ -366,6 +380,93 @@ $("note-form").addEventListener("submit", async (event) => {
     form.reset(); message("Nota agregada correctamente.");
     await loadCollection(id, "notes", version);
   } catch (error) { if (id === selectedId && version === detailVersion) message(error.message, true); }
+  finally { busy(form, false); }
+});
+async function loadAssets() {
+  const version = ++assetListVersion;
+  $("asset-list").replaceChildren();
+  $("asset-count").textContent = "";
+  $("asset-list-feedback").textContent = "Cargando activos…";
+  const query = new URLSearchParams();
+  for (const [key, value] of new FormData($("asset-filter-form"))) if (value) query.set(key, value);
+  try {
+    const assets = await api(`/assets${query.size ? "?" + query : ""}`);
+    if (version !== assetListVersion) return;
+    $("asset-count").textContent = `${assets.length} ${assets.length === 1 ? "activo" : "activos"}`;
+    $("asset-list-feedback").textContent = assets.length ? "" : (query.size ? "No hay activos que coincidan con los filtros." : "Todavía no hay activos registrados.");
+    for (const asset of assets) {
+      const row = element("article", undefined, "incident asset");
+      const name = element("button", asset.name, "incident-title asset-name");
+      name.type = "button";
+      name.addEventListener("click", () => openAssetDetail(asset.id));
+      row.append(name, element("span", assetTypes[asset.type], "badge"), element("span", severities[asset.criticality], `badge severity-${asset.criticality}`), dateNode(asset.created_at));
+      $("asset-list").append(row);
+    }
+  } catch (error) {
+    if (version === assetListVersion) $("asset-list-feedback").textContent = error.message + " Usá Aplicar filtros para reintentar.";
+  }
+}
+async function openAssetDetail(id) {
+  const version = ++assetDetailVersion;
+  $("asset-create-panel").hidden = true;
+  $("asset-list-panel").hidden = true;
+  $("asset-detail-panel").hidden = false;
+  $("asset-detail-content").hidden = true;
+  $("asset-detail-feedback").textContent = "Cargando activo…";
+  try {
+    const asset = await api(`/assets/${id}`);
+    if (version !== assetDetailVersion) return;
+    $("asset-detail-id").textContent = `ACTIVO #${asset.id}`;
+    $("asset-detail-name").textContent = asset.name;
+    $("asset-detail-description").textContent = asset.description || "Sin descripción.";
+    $("asset-detail-date").replaceChildren("Creado el ", dateNode(asset.created_at));
+    $("asset-detail-type").textContent = `Tipo: ${assetTypes[asset.type]}`;
+    $("asset-detail-criticality").textContent = `Criticidad ${severities[asset.criticality].toLowerCase()}`;
+    $("asset-detail-criticality").className = `badge severity-${asset.criticality}`;
+    $("asset-detail-feedback").textContent = "";
+    $("asset-detail-content").hidden = false;
+    $("asset-detail-name").focus();
+  } catch (error) {
+    if (version !== assetDetailVersion) return;
+    $("asset-detail-feedback").textContent = error.message;
+    const retry = element("button", "Reintentar", "text-button");
+    retry.type = "button";
+    retry.addEventListener("click", () => openAssetDetail(id));
+    $("asset-detail-feedback").append(" ", retry);
+  }
+}
+$("new-asset-button").addEventListener("click", () => {
+  ++assetDetailVersion;
+  $("asset-detail-panel").hidden = true;
+  $("asset-list-panel").hidden = false;
+  $("asset-create-panel").hidden = false;
+  $("asset-create-form").elements.name.focus();
+});
+$("cancel-asset-create").addEventListener("click", () => { $("asset-create-panel").hidden = true; $("new-asset-button").focus(); });
+$("asset-filter-form").addEventListener("submit", (event) => { event.preventDefault(); loadAssets(); });
+$("clear-asset-filters").addEventListener("click", () => { $("asset-filter-form").reset(); loadAssets(); });
+$("asset-back-button").addEventListener("click", () => {
+  ++assetDetailVersion;
+  $("asset-detail-panel").hidden = true;
+  $("asset-list-panel").hidden = false;
+  loadAssets(); $("asset-list-heading").scrollIntoView({block: "nearest"});
+});
+$("asset-create-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const body = Object.fromEntries(new FormData(form));
+  body.name = body.name.trim();
+  if (!body.name) { message("Completá el nombre del activo con texto.", true); return; }
+  body.description = body.description || null;
+  const version = assetDetailVersion;
+  busy(form, true, "Creando…"); message("");
+  try {
+    const asset = await api("/assets", "POST", body);
+    if (version !== assetDetailVersion || !currentUser) return;
+    form.reset();
+    message("Activo creado correctamente.");
+    await openAssetDetail(asset.id);
+  } catch (error) { if (version === assetDetailVersion) message(error.message, true); }
   finally { busy(form, false); }
 });
 async function start() {
