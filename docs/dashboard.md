@@ -53,7 +53,7 @@ Los conteos y listas parten de las tablas de incidentes, activos, riesgos y
 controles. No unen tablas de relaciones muchos a muchos: varios activos de un
 incidente o controles de un riesgo no multiplican filas ni totales. La consulta
 no genera auditoría, no escribe datos ni requiere una migración nueva. Se usan
-las migraciones existentes hasta 010.
+las migraciones existentes hasta 011.
 
 ## Interfaz
 
@@ -109,3 +109,6 @@ Comprobación manual:
 5. Probar el ancho de celular, navegación con teclado y títulos con caracteres
    especiales. Desconectar la red y actualizar: debe aparecer un error; recuperar
    la conexión y pulsar Reintentar.
+
+El dashboard usa la evaluación original actual; las evaluaciones residuales de
+[riesgos](risk-assessments.md) no modifican sus niveles ni prioridades.

@@ -94,7 +94,7 @@ The original project roadmap is preserved. Beyond the initial incident module,
 the following capabilities remain future work:
 
 1. Asset deletion and ownership assignment
-2. Risk deletion and residual evaluation
+2. Risk deletion
 3. Security control deletion and effectiveness assessment
 4. Further incident workflow extensions
 5. Authentication audit events and stronger audit storage
@@ -137,8 +137,7 @@ list, creation, detail and filters by status, level and asset. The server enforc
 roles, CSRF, validation and same-organization associations; the database protects
 the association with a composite foreign key while preserving prior data.
 Score is probability × impact (integer factors 1–5). The prototype defines its own
-levels: low 1–4, medium 5–9, high 10–16, critical 17–25. Editing, deletion
-and residual evaluation are deferred.
+levels: low 1–4, medium 5–9, high 10–16, critical 17–25. Partial editing and residual evaluations are implemented; deletion is deferred.
 
 ## Initial security controls
 
@@ -147,7 +146,7 @@ risk associations. Administrators and analysts create/link/unlink; readers query
 The Spanish UI includes control list, filtering, creation/detail and “Controles
 asociados” on risk details, excluding already-linked controls from the selector.
 The relationship documents a measure, preserves the risk score and makes no
-effectiveness claim. Residual evaluation and control deletion remain
+effectiveness claim. Control deletion remains
 future work. Versioned migration tests verify preservation of prior module data;
 API and Chrome tests cover permissions, isolation, relations and interface flows.
 
@@ -222,3 +221,21 @@ is rewritten. The safe responsive UI offers role-protected prefilled forms,
 save/cancel, validation/error feedback and duplicate-submit guards. Detail/list
 refresh after save and Resumen refreshes on return. Resource deletion is not
 implemented. See [resource-edits.md](resource-edits.md) for the contract and tests.
+
+
+## Residual risk assessments (implemented, migration 011)
+
+Manual residual estimates have an append-only API history via POST/GET
+`/risks/{risk_id}/assessments`. Administrators/analysts create; all authenticated
+roles read. Strict 1–5 probability/impact and trimmed 1–5000 justification are
+validated. Score/level reuse the existing matrix. Original probability/impact/score
+snapshots and evaluator-name snapshots preserve historical comparisons. Higher
+residual scores are allowed. Composite foreign keys enforce organization-scoped
+risk/evaluator references. Assessment and minimal numeric assessed audit event
+share a transaction; audit failure rolls back the assessment. Justification is
+never copied to audit. Migration 011 preserves prior data and audit ID sequences.
+The responsive safe UI separates original/latest/history and supports errors and
+retries. Controls do not automatically alter estimates; dashboard priorities and
+levels continue using the current original score. Assessment editing/deletion
+are not provided. See [risk-assessments.md](risk-assessments.md) for the API,
+schema, tests and manual verification.

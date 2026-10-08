@@ -426,6 +426,44 @@ async function poll(fn) {
   await evaluate(`document.getElementById('summary-nav').click()`);
   await wait(`!document.getElementById('dashboard-content').hidden && document.getElementById('dashboard-updated').textContent.includes('actualizado')`);
   await evaluate(`document.getElementById('management-nav').click()`);
+  // Manual residual assessments preserve the original and the dashboard.
+  const assessmentRisk = await evaluate(`(async()=>{const risk=(await api('/risks'))[0];window.originalAssessmentRisk=risk;await openRiskDetail(risk.id);return risk;})()`);
+  await wait(`document.getElementById('assessment-latest').textContent === 'Sin evaluación residual' && !document.getElementById('assessment-form').hidden`);
+  const originalDashboard = await evaluate(`(async()=>{const data=await api('/dashboard');delete data.generated_at;return data;})()`);
+  await evaluate(`(()=>{const f=document.getElementById('assessment-form');f.elements.justification.value='   ';f.dispatchEvent(new Event('submit',{cancelable:true}));})()`);
+  await wait(`document.getElementById('assessment-save-feedback').textContent.includes('vacía')`);
+  await evaluate(`(()=>{const f=document.getElementById('assessment-form');f.elements.justification.value=${JSON.stringify(payload)};f.elements.residual_probability.value='5';f.elements.residual_impact.value='5';window.fetch=async()=>{throw new TypeError('offline')};f.requestSubmit();})()`);
+  await wait(`document.getElementById('assessment-save-feedback').textContent.includes('conectar') && !document.querySelector('#assessment-form button[type="submit"]').disabled`);
+  assert.equal(await evaluate(`document.getElementById('assessment-form').elements.justification.value`),payload);
+  await evaluate(`window.fetch=async(url,options)=>{if(url.endsWith('/assessments') && options?.method==='POST')return new Response('{}',{status:422});return window.originalFetch(url,options);};document.getElementById('assessment-form').requestSubmit()`);
+  await wait(`document.getElementById('assessment-save-feedback').textContent.includes('Revisá')`);
+  await evaluate(`window.assessmentPostCount=0;window.fetch=async(url,options)=>{if(url.endsWith('/assessments') && options?.method==='POST')window.assessmentPostCount++;return window.originalFetch(url,options);};document.getElementById('assessment-form').requestSubmit();document.getElementById('assessment-form').dispatchEvent(new Event('submit',{cancelable:true}))`);
+  await wait(`document.querySelectorAll('#assessment-list > li').length === 1 && !document.querySelector('#assessment-form button[type="submit"]').disabled`);
+  assert.equal(await evaluate(`window.assessmentPostCount`),1);
+  assert.equal(await evaluate(`document.getElementById('assessment-latest').textContent.includes('25') && document.getElementById('assessment-latest').textContent.includes('mayor en 5') && document.getElementById('assessment-latest').textContent.includes(${JSON.stringify(payload)}) && !document.querySelector('#risk-assessments-section img') && !window.xss`),true);
+  assert.equal(await evaluate(`document.getElementById('risk-detail-matrix').textContent`),`Probabilidad: ${assessmentRisk.probability} · Impacto: ${assessmentRisk.impact} · Puntaje: ${assessmentRisk.score}`);
+  await evaluate(`window.fetch=window.originalFetch;(()=>{const f=document.getElementById('assessment-form');f.elements.residual_probability.value='1';f.elements.residual_impact.value='2';f.elements.justification.value='Lower manual estimate';f.requestSubmit();})()`);
+  await wait(`document.querySelectorAll('#assessment-list > li').length === 2 && !document.querySelector('#assessment-form button[type="submit"]').disabled`);
+  assert.equal(await evaluate(`document.getElementById('assessment-latest').textContent.includes('menor en 18')`),true);
+  // Edit the original, then capture a new snapshot and restore it.
+  await evaluate(`(async()=>{await api('/risks/'+window.originalAssessmentRisk.id,'PATCH',{probability:1,impact:1});await openRiskDetail(window.originalAssessmentRisk.id);})()`);
+  await wait(`document.querySelectorAll('#assessment-list > li').length === 2`);
+  assert.equal(await evaluate(`document.getElementById('assessment-latest').textContent.includes('Original al evaluar: 5 × 4 = 20')`),true);
+  await evaluate(`(()=>{const f=document.getElementById('assessment-form');f.elements.residual_probability.value='5';f.elements.residual_impact.value='5';f.elements.justification.value='Higher manual estimate';f.requestSubmit();})()`);
+  await wait(`document.querySelectorAll('#assessment-list > li').length === 3 && !document.querySelector('#assessment-form button[type="submit"]').disabled`);
+  assert.equal(await evaluate(`document.getElementById('assessment-latest').textContent.includes('Original al evaluar: 1 × 1 = 1') && document.getElementById('assessment-latest').textContent.includes('mayor en 24')`),true);
+  await evaluate(`(async()=>{await api('/risks/'+window.originalAssessmentRisk.id,'PATCH',{probability:window.originalAssessmentRisk.probability,impact:window.originalAssessmentRisk.impact});await openRiskDetail(window.originalAssessmentRisk.id);document.getElementById('assessment-history').open=true;})()`);
+  await wait(`document.querySelectorAll('#assessment-list > li').length === 3`);
+  assert.equal(await evaluate(`Array.from(document.querySelectorAll('#risk-assessments-section time')).every(t=>t.textContent===new Intl.DateTimeFormat('es',{dateStyle:'medium',timeStyle:'short'}).format(new Date(t.dateTime)))`),true);
+  assert.deepEqual(await evaluate(`(async()=>{const data=await api('/dashboard');delete data.generated_at;return data;})()`),originalDashboard);
+  assert.equal(await evaluate(`(async()=>{const logs=await api('/audit-logs?action=assessed');return logs.items.length===3 && logs.items.every(item=>!JSON.stringify(item.details).includes('justification') && !JSON.stringify(item.details).includes(${JSON.stringify(payload)}));})()`),true);
+  await evaluate(`window.fetch=async()=>{throw new TypeError('offline')};document.getElementById('assessment-retry').click()`);
+  await wait(`document.getElementById('assessment-feedback').textContent.includes('conectar') && !document.getElementById('assessment-retry').hidden`);
+  await evaluate(`window.fetch=window.originalFetch;document.getElementById('assessment-retry').click()`);
+  await wait(`document.querySelectorAll('#assessment-list > li').length === 3 && document.getElementById('assessment-retry').hidden`);
+  await command('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+  assert.equal(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`),true);
+  await command('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
   // Audit list, immutable historical actor text, combined filters, pagination and feedback.
   await evaluate(`(async () => {
     await api('/users/1', 'PATCH', {display_name: ${JSON.stringify(payload)}});
@@ -507,7 +545,9 @@ async function poll(fn) {
   await wait(`!document.getElementById('control-detail-content').hidden`);
   assert.equal(await evaluate(`document.getElementById('control-detail-name').textContent`),payload);
   assert.equal(await evaluate(`['asset','risk','control'].every(kind=>document.getElementById(kind+'-edit-button').hidden && document.getElementById(kind+'-edit-panel').hidden)`),true);
-  console.log('OK: edición (guardar/cancelar, parcial/null, recálculo, errores/reintento, envíos repetidos, permisos y móvil), resumen (navegación, actualización, enlaces, carga/error/reintento, permisos, fechas y móvil), auditoría (permisos, filtros, paginación, carga/error/vacío, XSS, fechas y móvil), login/logout, administración de usuarios, lector, responsables, limpieza de asignaciones, incidentes, activos, riesgos, controles, vínculos, historial, notas, filtros, XSS, fechas locales, errores de red, /docs y anchos 1280/390.');
+  await wait(`document.querySelectorAll('#assessment-list > li').length === 3`);
+  assert.equal(await evaluate(`document.getElementById('assessment-form').hidden && document.getElementById('assessment-latest').textContent.includes('Higher manual estimate')`),true);
+  console.log('OK: evaluaciones residuales (historial, instantáneas, mayores/menores, auditoría, original/dashboard conservados, errores, roles y móvil), edición (guardar/cancelar, parcial/null, recálculo, errores/reintento, envíos repetidos, permisos y móvil), resumen (navegación, actualización, enlaces, carga/error/reintento, permisos, fechas y móvil), auditoría (permisos, filtros, paginación, carga/error/vacío, XSS, fechas y móvil), login/logout, administración de usuarios, lector, responsables, limpieza de asignaciones, incidentes, activos, riesgos, controles, vínculos, historial, notas, filtros, XSS, fechas locales, errores de red, /docs y anchos 1280/390.');
   await command('Browser.close');
 })().catch(error => { console.error(error);process.exitCode=1; }).finally(async () => {
   if(socket && socket.readyState===WebSocket.OPEN) {

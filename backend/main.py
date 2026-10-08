@@ -83,10 +83,12 @@ def migrate_database() -> None:
 
 AuditAction = Literal["created", "status_changed", "note_created", "linked", "unlinked",
                       "assignee_changed", "role_changed", "deactivated", "reactivated",
-                      "password_reset", "user_updated", "updated"]
+                      "password_reset", "user_updated", "updated", "assessed"]
 AuditResource = Literal["incident", "asset", "risk", "control", "user"]
 # Each event has an explicit allowlist; free text and credentials are never details.
 AUDIT_DETAIL_KEYS = {
+    "assessed": {"assessment_id", "original_probability", "original_impact", "original_score",
+                 "residual_probability", "residual_impact", "residual_score"},
     "created": {"asset_id"}, "status_changed": {"previous_status", "new_status"},
     "note_created": {"note_id"}, "linked": {"asset_id", "control_id"},
     "unlinked": {"asset_id", "control_id"},
@@ -323,6 +325,36 @@ class RiskUpdate(PartialResourceUpdate):
     impact: int | None = Field(default=None, strict=True, ge=1, le=5)
     status: RiskStatus | None = None
     asset_id: int | None = Field(default=None, strict=True, gt=0)
+
+
+class RiskAssessmentCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    residual_probability: int = Field(strict=True, ge=1, le=5)
+    residual_impact: int = Field(strict=True, ge=1, le=5)
+    justification: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=5000)]
+
+
+class RiskAssessment(RiskAssessmentCreate):
+    model_config = ConfigDict(extra="ignore")
+    id: int
+    risk_id: int
+    evaluator_id: int
+    evaluator_name: str
+    created_at: datetime
+    original_probability: int
+    original_impact: int
+    original_score: int
+    original_level: RiskLevel
+    residual_score: int
+    residual_level: RiskLevel
+
+
+def public_assessment(row):
+    result = dict(row)
+    result["original_level"] = risk_level(result["original_score"])
+    result["residual_score"] = result["residual_probability"] * result["residual_impact"]
+    result["residual_level"] = risk_level(result["residual_score"])
+    return result
 
 
 class Risk(RiskCreate):
@@ -960,6 +992,48 @@ def unlink_risk_control(risk_id: int, control_id: int,
             raise HTTPException(status_code=404, detail="Link not found")
         record_audit(connection, user, "unlinked", "risk", risk_id, control_id=control_id)
     return Response(status_code=204)
+
+
+@app.post("/risks/{risk_id}/assessments", response_model=RiskAssessment, status_code=201)
+def create_risk_assessment(risk_id: int, assessment: RiskAssessmentCreate,
+                           user: dict = Depends(require_roles("administrador", "analista"))):
+    with closing(connect()) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        risk = connection.execute("SELECT probability, impact FROM risks WHERE id = ? AND organization_id = ?",
+                                  (risk_id, user["organization_id"])).fetchone()
+        if risk is None:
+            raise HTTPException(status_code=404, detail="Risk not found")
+        original_score = risk["probability"] * risk["impact"]
+        residual_score = assessment.residual_probability * assessment.residual_impact
+        cursor = connection.execute(
+            "INSERT INTO risk_assessments (organization_id, risk_id, evaluator_id, evaluator_name, created_at, "
+            "residual_probability, residual_impact, justification, original_probability, original_impact, original_score) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (user["organization_id"], risk_id, user["id"], user["display_name"], datetime.now(timezone.utc).isoformat(),
+             assessment.residual_probability, assessment.residual_impact, assessment.justification,
+             risk["probability"], risk["impact"], original_score),
+        )
+        record_audit(connection, user, "assessed", "risk", risk_id, assessment_id=cursor.lastrowid,
+                     original_probability=risk["probability"], original_impact=risk["impact"], original_score=original_score,
+                     residual_probability=assessment.residual_probability, residual_impact=assessment.residual_impact,
+                     residual_score=residual_score)
+        row = connection.execute("SELECT * FROM risk_assessments WHERE id = ? AND organization_id = ?",
+                                 (cursor.lastrowid, user["organization_id"])).fetchone()
+    return public_assessment(row)
+
+
+@app.get("/risks/{risk_id}/assessments", response_model=list[RiskAssessment])
+def list_risk_assessments(risk_id: int, user: dict = Depends(require_user)):
+    with closing(connect()) as connection, connection:
+        connection.execute("BEGIN")
+        if connection.execute("SELECT id FROM risks WHERE id = ? AND organization_id = ?",
+                              (risk_id, user["organization_id"])).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Risk not found")
+        rows = connection.execute(
+            "SELECT * FROM risk_assessments WHERE risk_id = ? AND organization_id = ? ORDER BY created_at DESC, id DESC",
+            (risk_id, user["organization_id"]),
+        ).fetchall()
+    return [public_assessment(row) for row in rows]
 
 
 @app.post("/risks", response_model=Risk, status_code=201)

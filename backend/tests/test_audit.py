@@ -283,6 +283,7 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(self.snapshot(), before)
         self.stop_server()
         with closing(fixtures.app_main.connect()) as connection, connection:
+            fixtures.rewind_assessment_migration(connection)
             connection.execute("DROP TABLE audit_logs")
             connection.execute("DELETE FROM schema_migrations WHERE version IN (9, 10)")
         legacy = self.snapshot()
@@ -290,7 +291,7 @@ class AuditTests(unittest.TestCase):
         migrated = self.snapshot()
         for table, rows in legacy.items():
             if table == "schema_migrations":
-                self.assertEqual(migrated[table][:-2], rows)
+                self.assertEqual(migrated[table][:-3], rows)
             else:
                 self.assertEqual(migrated[table], rows, table)
         self.assertEqual(migrated["audit_logs"], [])

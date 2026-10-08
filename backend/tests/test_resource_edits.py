@@ -1,4 +1,4 @@
-﻿"""Partial resource edits, transactional auditing and migration preservation."""
+"""Partial resource edits, transactional auditing and migration preservation."""
 from contextlib import closing
 from http.cookiejar import CookieJar
 import json
@@ -212,6 +212,7 @@ class ResourceEditTests(unittest.TestCase):
         self.stop_server()
         with closing(fixtures.app_main.connect()) as connection, connection:
             rows = [tuple(row) for row in connection.execute("SELECT * FROM audit_logs ORDER BY id")]
+            fixtures.rewind_assessment_migration(connection)
             connection.execute("DROP TABLE audit_logs")
             connection.executescript((fixtures.BACKEND / "migrations/009_audit_logs.sql").read_text(encoding="utf-8"))
             connection.executemany("INSERT INTO audit_logs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
@@ -221,7 +222,7 @@ class ResourceEditTests(unittest.TestCase):
         fixtures.app_main.migrate_database()
         after = self.snapshot()
         for table, rows in before.items():
-            self.assertEqual(after[table][:-1] if table == "schema_migrations" else after[table], rows, table)
+            self.assertEqual(after[table][:-2] if table == "schema_migrations" else after[table], rows, table)
         fixtures.app_main.migrate_database()
         self.assertEqual(self.snapshot(), after)
         self.start_server()

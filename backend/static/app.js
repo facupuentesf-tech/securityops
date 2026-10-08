@@ -1,5 +1,7 @@
 "use strict";
 const editors = Object.fromEntries(["asset", "risk", "control"].map(kind => [kind, {version: 0, resource: null, saving: false, loading: false}]));
+let assessmentVersion = 0;
+let assessmentSaving = false;
 let dashboardVersion = 0;
 let activeSection = "summary";
 let auditVersion = 0;
@@ -8,7 +10,7 @@ let auditFilters = new URLSearchParams();
 const auditActions = {created: "Creación", status_changed: "Cambio de estado", note_created: "Creación de nota",
   linked: "Vinculación", unlinked: "Desvinculación", assignee_changed: "Cambio de responsable",
   role_changed: "Cambio de rol", deactivated: "Desactivación", reactivated: "Reactivación",
-  password_reset: "Restablecimiento de contraseña", user_updated: "Actualización de cuenta", updated: "Edición"};
+  password_reset: "Restablecimiento de contraseña", user_updated: "Actualización de cuenta", updated: "Edición", assessed: "Evaluación residual"};
 const auditResources = {incident: "Incidente", asset: "Activo", risk: "Riesgo", control: "Control", user: "Usuario"};
 
 const $ = (id) => document.getElementById(id);
@@ -55,6 +57,7 @@ function message(text, error = false) {
   $("message").hidden = !text;
 }
 function showLogin() {
+  resetAssessments();
   for (const kind of Object.keys(editors)) resetEditor(kind);
   ++dashboardVersion;
   $("dashboard-content").hidden = true;
@@ -130,6 +133,7 @@ function showApplication(session) {
   $("account").hidden = false;
   $("account-name").textContent = `${currentUser.display_name} · ${roles[currentUser.role]}`;
   const canWrite = currentUser.role !== "lector";
+  resetAssessments();
   for (const kind of Object.keys(editors)) resetEditor(kind);
   if (currentUser.role !== "administrador") {
     $("incident-assignee-form").hidden = true;
@@ -708,6 +712,7 @@ async function loadRisks() {
 }
 
 async function openRiskDetail(id) {
+  resetAssessments();
   resetEditor("risk");
   selectedRiskId = id;
   const version = ++riskDetailVersion;
@@ -727,6 +732,9 @@ async function openRiskDetail(id) {
     const risk = await api(`/risks/${id}`);
     if (version !== riskDetailVersion || !currentUser) return;
     prepareEditor("risk", risk);
+    $("assessment-form").hidden = currentUser.role === "lector";
+    $("assessment-form").elements.residual_probability.value = risk.probability;
+    $("assessment-form").elements.residual_impact.value = risk.impact;
     $("risk-detail-id").textContent = `RIESGO #${risk.id}`;
     $("risk-detail-title").textContent = risk.title;
     $("risk-detail-description").textContent = risk.description || "Sin descripción.";
@@ -739,7 +747,7 @@ async function openRiskDetail(id) {
     $("risk-detail-feedback").textContent = "";
     $("risk-detail-content").hidden = false;
     $("risk-detail-title").focus();
-    await Promise.all([loadRiskControls(id, version), loadAssigneeDetail("risks", id, version, risk)]);
+    await Promise.all([loadRiskControls(id, version), loadAssigneeDetail("risks", id, version, risk), loadAssessments(id, version)]);
   } catch (error) {
     if (version !== riskDetailVersion || !currentUser) return;
     $("risk-detail-feedback").textContent = error.message;
@@ -761,6 +769,7 @@ $("risk-assets-retry").addEventListener("click", loadRiskAssets);
 $("risk-filter-form").addEventListener("submit", event => { event.preventDefault(); loadRisks(); });
 $("clear-risk-filters").addEventListener("click", () => { $("risk-filter-form").reset(); loadRisks(); loadRiskAssets(); });
 $("risk-back-button").addEventListener("click", () => {
+  resetAssessments();
   resetEditor("risk");
   ++riskDetailVersion;
   $("risk-detail-panel").hidden = true;
@@ -1059,6 +1068,11 @@ function auditDetails(event) {
   for (const [field, label] of [["name", "Nombre actualizado"], ["title", "Título actualizado"], ["description", "Descripción actualizada"]]) {
     if (d[field + "_changed"]) parts.push(label);
   }
+  if (d.assessment_id != null) {
+    parts.push(`Evaluación #${d.assessment_id}`);
+    parts.push(`Original: ${d.original_probability} × ${d.original_impact} = ${d.original_score}`);
+    parts.push(`Residual: ${d.residual_probability} × ${d.residual_impact} = ${d.residual_score}`);
+  }
   const statusLabels = {...statuses, ...riskStatuses, ...controlStatuses};
   for (const [field, label, labels] of [["type", "Tipo", {...assetTypes, ...controlTypes}], ["criticality", "Criticidad", severities], ["probability", "Probabilidad", {}], ["impact", "Impacto", {}], ["asset_id", "Activo", {}]]) {
     if ("previous_" + field in d) {
@@ -1348,4 +1362,72 @@ for (const [kind, schema] of Object.entries(editSchemas)) {
   });
   $(kind + "-edit-form").addEventListener("submit", event => { event.preventDefault(); saveEditor(kind); });
 }
+
+
+function resetAssessments() {
+  ++assessmentVersion; assessmentSaving = false;
+  $("assessment-form").hidden = true;
+  $("assessment-form").reset();
+  for (const field of $("assessment-form").elements) field.disabled = false;
+  $("assessment-form").querySelector('button[type="submit"]').textContent = "Guardar evaluación";
+  $("assessment-latest").replaceChildren(); $("assessment-list").replaceChildren();
+  $("assessment-feedback").textContent = ""; $("assessment-save-feedback").textContent = "";
+  $("assessment-retry").hidden = true; $("assessment-history").open = false;
+}
+function assessmentActive(id, version) {
+  return currentUser && id === selectedRiskId && version === riskDetailVersion && !$("risk-detail-panel").hidden;
+}
+function assessmentNode(assessment) {
+  const node = element("article");
+  node.append(element("h3", `Evaluación #${assessment.id}`), element("p", `${assessment.evaluator_name} (#${assessment.evaluator_id})`, "user-text"), dateNode(assessment.created_at));
+  node.append(element("p", `Original al evaluar: ${assessment.original_probability} × ${assessment.original_impact} = ${assessment.original_score} · Nivel ${riskLevels[assessment.original_level]}`));
+  node.append(element("p", `Residual: ${assessment.residual_probability} × ${assessment.residual_impact} = ${assessment.residual_score} · Nivel ${riskLevels[assessment.residual_level]}`));
+  const difference = assessment.residual_score - assessment.original_score;
+  node.append(element("p", difference > 0 ? `Puntaje residual mayor en ${difference} puntos.` : difference < 0 ? `Puntaje residual menor en ${-difference} puntos.` : "Puntaje residual igual al original al evaluar."));
+  node.append(element("p", assessment.justification, "user-text"));
+  return node;
+}
+async function loadAssessments(id, version) {
+  const request = ++assessmentVersion;
+  $("assessment-feedback").textContent = "Cargando evaluaciones…";
+  $("assessment-retry").hidden = true;
+  $("assessment-latest").replaceChildren(); $("assessment-list").replaceChildren();
+  try {
+    const assessments = await api(`/risks/${id}/assessments`);
+    if (request !== assessmentVersion || !assessmentActive(id, version)) return;
+    $("assessment-feedback").textContent = "";
+    if (!assessments.length) {
+      $("assessment-latest").textContent = "Sin evaluación residual";
+      $("assessment-list").append(element("li", "Todavía no hay evaluaciones residuales.")); return;
+    }
+    $("assessment-latest").append(element("h3", "Última evaluación residual"), assessmentNode(assessments[0]));
+    for (const assessment of assessments) {
+      const row = element("li"); row.append(assessmentNode(assessment)); $("assessment-list").append(row);
+    }
+  } catch (error) {
+    if (request !== assessmentVersion || !assessmentActive(id, version)) return;
+    $("assessment-feedback").textContent = error.message; $("assessment-retry").hidden = false;
+  }
+}
+$("assessment-retry").addEventListener("click", () => loadAssessments(selectedRiskId, riskDetailVersion));
+$("assessment-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const form = event.currentTarget, id = selectedRiskId, version = riskDetailVersion;
+  if (assessmentSaving || !assessmentActive(id, version) || currentUser.role === "lector") return;
+  const justification = form.elements.justification.value.trim();
+  if (!justification) { $("assessment-save-feedback").textContent = "La justificación no puede quedar vacía."; form.elements.justification.focus(); return; }
+  const body = {residual_probability: Number(form.elements.residual_probability.value), residual_impact: Number(form.elements.residual_impact.value), justification};
+  assessmentSaving = true; busy(form, true, "Guardando…"); $("assessment-save-feedback").textContent = "";
+  try {
+    await api(`/risks/${id}/assessments`, "POST", body);
+    if (!assessmentActive(id, version)) return;
+    form.elements.justification.value = "";
+    $("assessment-save-feedback").textContent = "Evaluación guardada.";
+    await loadAssessments(id, version);
+  } catch (error) {
+    if (assessmentActive(id, version)) $("assessment-save-feedback").textContent = error.message;
+  } finally {
+    if (assessmentActive(id, version)) { assessmentSaving = false; busy(form, false); }
+  }
+});
 start();

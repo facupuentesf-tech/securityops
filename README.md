@@ -22,6 +22,7 @@ compartido.
 - Auditoría local de cambios de negocio y usuarios, con consulta paginada solo para administradores.
 - Asignar responsables opcionales a incidentes y riesgos, con filtros por responsable.
 - Crear, listar y consultar riesgos, con evaluación inicial y activo opcional.
+- Evaluaciones residuales manuales con historial, instantáneas y auditoría.
 - Crear, listar y consultar controles de seguridad y vincularlos con riesgos.
 - Vincular varios activos por incidente y quitar vínculos sin borrar recursos.
 - Crear, listar y consultar activos, con filtros por tipo y criticidad combinados con AND.
@@ -56,6 +57,8 @@ compartido.
 | Consultar riesgos | Sí | Sí | Sí |
 | Crear riesgos | Sí | Sí | No |
 | Editar riesgos | Sí | Sí | No |
+| Consultar evaluaciones residuales | Sí | Sí | Sí |
+| Registrar evaluaciones residuales | Sí | Sí | No |
 | Consultar responsables y candidatos elegibles | Sí | Sí | Sí |
 | Asignar, reasignar y quitar responsables | Sí | No | No |
 | Consultar controles y vínculos con riesgos | Sí | Sí | Sí |
@@ -75,7 +78,7 @@ su contraseña.
 Aún no están implementados:
 
 - Eliminación y asignación de responsables de activos
-- Eliminación de riesgos y evaluación residual
+- Eliminación de riesgos
 - Eliminación de controles de seguridad, evaluación de eficacia
 - Eventos de auditoría de autenticación (login, logout, rechazos y expiración)
 - Reportes
@@ -459,7 +462,7 @@ Comprobación manual:
 La sección **Riesgos** permite crear, listar, filtrar y consultar riesgos de la
 organización autenticada. Administrador y analista pueden crear; lector solo
 consulta. Cada riesgo puede asociarse a un activo de la misma organización o
-registrarse sin activo. Eliminación y evaluación residual
+registrarse sin activo. Eliminación
 quedan para una etapa posterior.
 
 | Método | Ruta | Comportamiento |
@@ -566,7 +569,7 @@ propios que todavía no estén vinculados. Quitar el vínculo conserva riesgo y
 control, y permite seleccionarlo otra vez. La asociación documenta una medida:
 **no cambia automáticamente el puntaje o nivel ni demuestra la eficacia del
 control**. Se pueden documentar controles planificados, implementados o retirados.
-Evaluación residual y eliminación de controles quedan pendientes.
+Eliminación de controles queda pendiente.
 
 Comprobación manual:
 
@@ -760,3 +763,27 @@ anteriores y nuevos. No se implementa eliminación.
 
 Contrato, migración, pruebas y pasos manuales:
 [docs/resource-edits.md](docs/resource-edits.md).
+
+
+## Evaluaciones de riesgo residual (migración 011)
+
+El detalle del riesgo distingue la evaluación original, la última residual y su
+historial. Administradores y analistas pueden registrar estimaciones manuales;
+lectores consultan. No se editan ni eliminan evaluaciones. Probabilidad e impacto
+son enteros estrictos de 1 a 5, con justificación recortada de 1 a 5000 caracteres.
+El servidor calcula puntaje/nivel y toma una instantánea de los valores originales
+al evaluar. Cambios posteriores del riesgo no alteran comparaciones históricas.
+Se admiten valores residuales mayores que los originales.
+
+`POST /risks/{risk_id}/assessments` devuelve 201; GET en la misma ruta devuelve
+historial por fecha/ID descendente. Actor/organización vienen de la sesión;
+claves foráneas compuestas impiden relaciones entre organizaciones. Evaluación
+y evento `assessed` comparten transacción: si falla la auditoría se revierte todo.
+La justificación no se copia a la auditoría, que contiene solo IDs/números mínimos.
+
+Vincular o implementar controles no modifica valores automáticamente. El dashboard
+sigue basado en el puntaje original actual, sin usar evaluaciones residuales.
+La interfaz muestra evaluador histórico, fechas locales, diferencias en puntos,
+mensajes de carga/error/reintento y texto seguro. Sin registros muestra
+“Sin evaluación residual”. Contrato, migración, pruebas y pasos manuales:
+[docs/risk-assessments.md](docs/risk-assessments.md).

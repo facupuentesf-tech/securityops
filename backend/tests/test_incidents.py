@@ -23,6 +23,13 @@ sys.path.insert(0, str(BACKEND))
 import main as app_main
 
 
+def rewind_assessment_migration(connection):
+    """Restore pre-011 tables in disposable migration-test databases."""
+    connection.execute("DROP TABLE risk_assessments")
+    connection.execute("DROP INDEX idx_users_id_organization")
+    connection.execute("DELETE FROM schema_migrations WHERE version = 11")
+
+
 def rewind_assignee_migration(connection):
     """Restore a pre-008 schema in a disposable migration-test database."""
     for trigger in ("incidents_assignee_insert", "incidents_assignee_update",
@@ -461,7 +468,7 @@ class IncidentTests(unittest.TestCase):
         with closing(sqlite3.connect(self.database)) as connection:
             self.assertEqual(
                 connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(),
-                [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,), (9,), (10,)],
+                [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,), (9,), (10,), (11,)],
             )
             self.assertEqual(
                 connection.execute("SELECT organization_id FROM incidents WHERE id = 17").fetchone()[0],
@@ -1147,7 +1154,7 @@ class IncidentTests(unittest.TestCase):
         with closing(sqlite3.connect(self.database)) as connection:
             after = {table: legacy_snapshot(connection, table) for table in tables}
             self.assertEqual(before, after)
-            self.assertEqual(connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(), [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,), (9,), (10,)])
+            self.assertEqual(connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(), [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,), (9,), (10,), (11,)])
         code, asset = self.request("POST", "/assets", self.asset_payload(description="Persistent asset"))
         self.assertEqual(code, 201)
         self.stop_server()
