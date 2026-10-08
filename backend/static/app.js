@@ -17,6 +17,8 @@ let controlListVersion = 0;
 let controlDetailVersion = 0;
 let riskControlsVersion = 0;
 let selectedRiskId = null;
+let assigneeFilterVersion = 0;
+const assigneeVersions = {incidents: 0, risks: 0};
 const dateFormat = new Intl.DateTimeFormat("es", {dateStyle: "medium", timeStyle: "short"});
 let selectedId = null;
 let listVersion = 0;
@@ -51,6 +53,14 @@ function showLogin() {
   ++riskListVersion; ++riskDetailVersion; ++riskAssetsVersion;
   ++controlListVersion; ++controlDetailVersion; ++riskControlsVersion;
   selectedRiskId = null;
+  ++assigneeFilterVersion; ++assigneeVersions.incidents; ++assigneeVersions.risks;
+  for (const prefix of ["incident", "risk"]) {
+    $(prefix + "-assignee-form").hidden = true;
+    $(prefix + "-assignee-name").textContent = "Sin asignar";
+    $(prefix + "-assignee-select").replaceChildren();
+    const option = element("option", "Todos los responsables"); option.value = "";
+    $(prefix + "-filter-assignee").replaceChildren(option);
+  }
   $("control-list").replaceChildren();
   $("control-create-form").reset();
   $("control-filter-form").reset();
@@ -96,12 +106,17 @@ function showApplication(session) {
   $("account").hidden = false;
   $("account-name").textContent = `${currentUser.display_name} · ${roles[currentUser.role]}`;
   const canWrite = currentUser.role !== "lector";
+  if (currentUser.role !== "administrador") {
+    $("incident-assignee-form").hidden = true;
+    $("risk-assignee-form").hidden = true;
+  }
   $("new-button").hidden = !canWrite;
   $("new-asset-button").hidden = !canWrite;
   $("new-risk-button").hidden = !canWrite;
   $("new-control-button").hidden = !canWrite;
   $("control-create-panel").hidden = true;
   loadControls();
+  loadAssigneeFilters();
   $("risk-create-panel").hidden = true;
   loadRiskAssets();
   loadRisks();
@@ -219,12 +234,13 @@ async function loadUsers() {
           });
           if (user.id === currentUser.id) {
             const session = await api("/auth/session");
-            if (session.user) showApplication(session);
+            if (session.user) { showApplication(session); await refreshAssigneeViews(); }
             else showLogin();
             return;
           }
           $("users-feedback").textContent = "Usuario actualizado.";
           await loadUsers();
+          await refreshAssigneeViews();
         } catch (error) {
           $("users-feedback").textContent = error.message;
         }
@@ -299,6 +315,8 @@ async function openDetail(id, clearMessage = true) {
   $("list-view").hidden = true;
   $("detail-view").hidden = false;
   $("detail-content").hidden = true;
+  $("incident-assignee-form").hidden = true;
+  $("incident-assignee-retry").hidden = true;
   $("affected-form").hidden = true;
   $("affected-select").replaceChildren();
   $("affected-list").replaceChildren();
@@ -318,7 +336,7 @@ async function openDetail(id, clearMessage = true) {
     $("detail-feedback").textContent = "";
     $("detail-content").hidden = false;
     $("detail-title").focus();
-    await Promise.all([loadCollection(id, "history", version), loadCollection(id, "notes", version), loadAffectedAssets(id, version)]);
+    await Promise.all([loadCollection(id, "history", version), loadCollection(id, "notes", version), loadAffectedAssets(id, version), loadAssigneeDetail("incidents", id, version, incident)]);
   } catch (error) {
     if (version === detailVersion) {
       $("detail-feedback").textContent = error.message;
@@ -367,6 +385,7 @@ $("user-create-form").addEventListener("submit", async (event) => {
     await api("/users", "POST", body);
     form.reset();
     $("users-feedback").textContent = "Usuario creado.";
+    await refreshAssigneeViews();
     await loadUsers();
   } catch (error) {
     $("users-feedback").textContent = error.message;
@@ -661,6 +680,8 @@ async function loadRisks() {
 async function openRiskDetail(id) {
   selectedRiskId = id;
   const version = ++riskDetailVersion;
+  $("risk-assignee-form").hidden = true;
+  $("risk-assignee-retry").hidden = true;
   $("associated-list").replaceChildren();
   $("associated-select").replaceChildren();
   $("associated-form").hidden = true;
@@ -686,7 +707,7 @@ async function openRiskDetail(id) {
     $("risk-detail-feedback").textContent = "";
     $("risk-detail-content").hidden = false;
     $("risk-detail-title").focus();
-    await loadRiskControls(id, version);
+    await Promise.all([loadRiskControls(id, version), loadAssigneeDetail("risks", id, version, risk)]);
   } catch (error) {
     if (version !== riskDetailVersion || !currentUser) return;
     $("risk-detail-feedback").textContent = error.message;
@@ -891,4 +912,108 @@ $("associated-form").addEventListener("submit", event => {
   if (!Number.isSafeInteger(controlId) || controlId <= 0 || $("associated-select").disabled) return;
   mutateRiskControl(selectedRiskId, riskDetailVersion, "POST", controlId);
 });
+function assigneeContext(kind) {
+  return kind === "incidents" ? {prefix: "incident", id: selectedId, version: detailVersion} : {prefix: "risk", id: selectedRiskId, version: riskDetailVersion};
+}
+function assigneeActive(kind, id, version) {
+  const context = assigneeContext(kind);
+  return currentUser && context.id === id && context.version === version;
+}
+async function loadAssigneeFilters() {
+  const version = ++assigneeFilterVersion;
+  for (const prefix of ["incident", "risk"]) {
+    $(prefix + "-filter-assignee").disabled = true;
+    $(prefix + "-assignee-filter-feedback").textContent = "Cargando responsables…";
+  }
+  try {
+    const candidates = await api("/assignees");
+    if (version !== assigneeFilterVersion || !currentUser) return;
+    for (const prefix of ["incident", "risk"]) {
+      const select = $(prefix + "-filter-assignee"), previous = select.value;
+      const all = element("option", "Todos los responsables"); all.value = "";
+      select.replaceChildren(all);
+      for (const user of candidates) { const option = element("option", user.display_name); option.value = user.id; select.append(option); }
+      select.value = candidates.some(user => String(user.id) === previous) ? previous : "";
+      select.disabled = false;
+      $(prefix + "-assignee-filter-feedback").textContent = candidates.length ? "" : "No hay responsables elegibles.";
+    }
+  } catch (error) {
+    if (version !== assigneeFilterVersion || !currentUser) return;
+    for (const prefix of ["incident", "risk"]) {
+      const feedback = $(prefix + "-assignee-filter-feedback"); feedback.textContent = error.message + " ";
+      const retry = element("button", "Reintentar", "text-button"); retry.type = "button";
+      retry.addEventListener("click", loadAssigneeFilters); feedback.append(retry);
+    }
+  }
+}
+async function loadAssigneeDetail(kind, id, version, resource) {
+  const prefix = assigneeContext(kind).prefix, requestVersion = ++assigneeVersions[kind];
+  const active = () => assigneeActive(kind, id, version) && requestVersion === assigneeVersions[kind];
+  if (!active()) return;
+  $(prefix + "-assignee-form").hidden = true;
+  $(prefix + "-assignee-retry").hidden = true;
+  $(prefix + "-assignee-retry").disabled = false;
+  $(prefix + "-assignee-feedback").textContent = "Cargando responsable…";
+  try {
+    resource = resource || await api(`/${kind}/${id}`);
+    if (!active()) return;
+    $(prefix + "-assignee-name").textContent = resource.assignee_id === null ? "Sin asignar" : `${resource.assignee_name} (#${resource.assignee_id})`;
+    if (currentUser.role !== "administrador") { $(prefix + "-assignee-feedback").textContent = ""; return; }
+    const candidates = await api("/assignees");
+    if (!active()) return;
+    if (currentUser.role !== "administrador") { $(prefix + "-assignee-feedback").textContent = ""; return; }
+    const select = $(prefix + "-assignee-select");
+    const placeholder = element("option", "Seleccioná un responsable"); placeholder.value = "";
+    select.replaceChildren(placeholder);
+    for (const user of candidates) { const option = element("option", user.display_name); option.value = user.id; select.append(option); }
+    select.value = resource.assignee_id === null ? "" : String(resource.assignee_id);
+    if (!candidates.length) { const empty = element("option", "No hay usuarios elegibles."); empty.value = ""; select.append(empty); }
+    select.disabled = !candidates.length;
+    $(prefix + "-assignee-form").querySelector('button[type="submit"]').disabled = !candidates.length;
+    $(prefix + "-assignee-clear").disabled = resource.assignee_id === null;
+    $(prefix + "-assignee-form").hidden = false;
+    $(prefix + "-assignee-feedback").textContent = candidates.length ? "" : "No hay responsables elegibles.";
+  } catch (error) {
+    if (!active()) return;
+    $(prefix + "-assignee-feedback").textContent = error.message;
+    $(prefix + "-assignee-retry").hidden = false;
+  }
+}
+async function saveAssignee(kind, assigneeId) {
+  const {prefix, id, version} = assigneeContext(kind);
+  const form = $(prefix + "-assignee-form");
+  busy(form, true, "Guardando…");
+  try {
+    const resource = await api(`/${kind}/${id}/assignee`, "PATCH", {assignee_id: assigneeId});
+    if (!assigneeActive(kind, id, version)) return;
+    $(prefix + "-assignee-name").textContent = resource.assignee_id === null ? "Sin asignar" : `${resource.assignee_name} (#${resource.assignee_id})`;
+    message(assigneeId === null ? "Responsable quitado." : "Responsable asignado.");
+  } catch (error) { if (assigneeActive(kind, id, version)) message(error.message, true); }
+  finally {
+    busy(form, false);
+    if (assigneeActive(kind, id, version)) await loadAssigneeDetail(kind, id, version);
+  }
+}
+async function refreshAssigneeViews() {
+  await loadAssigneeFilters();
+  const tasks = [loadList(), loadRisks()];
+  for (const kind of ["incidents", "risks"]) {
+    const {id, version} = assigneeContext(kind);
+    const visible = kind === "incidents" ? !$("detail-view").hidden : !$("risk-detail-panel").hidden;
+    if (id !== null && visible && currentUser) tasks.push(loadAssigneeDetail(kind, id, version));
+  }
+  await Promise.all(tasks);
+}
+for (const kind of ["incidents", "risks"]) {
+  const prefix = kind === "incidents" ? "incident" : "risk";
+  $(prefix + "-assignee-form").addEventListener("submit", event => {
+    event.preventDefault();
+    const select = $(prefix + "-assignee-select"), id = Number(select.value);
+    if (!select.disabled && Number.isSafeInteger(id) && id > 0) saveAssignee(kind, id);
+  });
+  $(prefix + "-assignee-clear").addEventListener("click", () => saveAssignee(kind, null));
+  $(prefix + "-assignee-retry").addEventListener("click", () => {
+    const {id, version} = assigneeContext(kind); loadAssigneeDetail(kind, id, version);
+  });
+}
 start();

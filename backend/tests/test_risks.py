@@ -176,16 +176,17 @@ class RiskTests(unittest.TestCase):
         self.stop_server()
         tables = ("organizations", "users", "sessions", "incidents", "assets", "incident_assets", "incident_notes", "incident_status_history")
         with closing(fixtures.app_main.connect()) as connection, connection:
+            fixtures.rewind_assignee_migration(connection)
             connection.execute("DROP TABLE risk_controls")
             connection.execute("DROP TABLE security_controls")
             connection.execute("DROP INDEX idx_risks_id_organization")
             connection.execute("DELETE FROM schema_migrations WHERE version = 7")
             connection.execute("DROP TABLE risks")
             connection.execute("DELETE FROM schema_migrations WHERE version = 6")
-            before = {table: [tuple(row) for row in connection.execute(f"SELECT * FROM {table} ORDER BY 1")] for table in tables}
+            before = {table: fixtures.legacy_snapshot(connection, table) for table in tables}
         fixtures.app_main.migrate_database(); fixtures.app_main.migrate_database()
         with closing(fixtures.app_main.connect()) as connection:
-            after = {table: [tuple(row) for row in connection.execute(f"SELECT * FROM {table} ORDER BY 1")] for table in tables}
+            after = {table: fixtures.legacy_snapshot(connection, table) for table in tables}
             self.assertEqual(before, after)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM risks").fetchone()[0], 0)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM schema_migrations WHERE version = 6").fetchone()[0], 1)

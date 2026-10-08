@@ -261,6 +261,8 @@ class Risk(RiskCreate):
     score: int
     level: RiskLevel
     asset_name: str | None = None
+    assignee_id: int | None = None
+    assignee_name: str | None = None
 
 
 def risk_level(score: int) -> str:
@@ -278,8 +280,9 @@ def public_risk(row: sqlite3.Row) -> dict:
 
 
 RISK_SELECT = (
-    "SELECT r.*, a.name AS asset_name FROM risks r LEFT JOIN assets a "
+    "SELECT r.*, a.name AS asset_name, u.display_name AS assignee_name FROM risks r LEFT JOIN assets a "
     "ON a.id = r.asset_id AND a.organization_id = r.organization_id "
+    "LEFT JOIN users u ON u.id = r.assignee_id AND u.organization_id = r.organization_id "
 )
 
 
@@ -305,6 +308,38 @@ class Incident(IncidentCreate):
 
     id: int
     created_at: datetime
+    assignee_id: int | None = None
+    assignee_name: str | None = None
+
+
+class AssigneeUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    assignee_id: int | None = Field(strict=True, gt=0)
+
+
+class AssigneeCandidate(BaseModel):
+    id: int
+    display_name: str
+
+
+INCIDENT_SELECT = (
+    "SELECT i.*, u.display_name AS assignee_name FROM incidents i "
+    "LEFT JOIN users u ON u.id = i.assignee_id AND u.organization_id = i.organization_id "
+)
+
+
+def require_assignee(connection, assignee_id, organization_id, eligible=False):
+    if assignee_id is None:
+        return
+    row = connection.execute(
+        "SELECT role, is_active FROM users WHERE id = ? AND organization_id = ?",
+        (assignee_id, organization_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if eligible and (not row["is_active"] or row["role"] not in ("administrador", "analista")):
+        raise HTTPException(status_code=422, detail="Assignee must be an active administrator or analyst")
 
 
 class IncidentStatusUpdate(BaseModel):
@@ -426,6 +461,49 @@ def list_users(actor: dict = Depends(require_roles("administrador"))):
             (actor["organization_id"],),
         ).fetchall()
     return [public_user(row) for row in rows]
+
+
+@app.get("/assignees", response_model=list[AssigneeCandidate])
+def list_assignees(user: dict = Depends(require_user)):
+    with closing(connect()) as connection:
+        rows = connection.execute(
+            "SELECT id, display_name FROM users WHERE organization_id = ? "
+            "AND is_active = 1 AND role IN ('administrador', 'analista') ORDER BY id",
+            (user["organization_id"],),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.patch("/incidents/{incident_id}/assignee", response_model=Incident)
+def assign_incident(incident_id: int, update: AssigneeUpdate,
+                    user: dict = Depends(require_roles("administrador"))):
+    with closing(connect()) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        if connection.execute("SELECT id FROM incidents WHERE id = ? AND organization_id = ?",
+                              (incident_id, user["organization_id"])).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Incident not found")
+        require_assignee(connection, update.assignee_id, user["organization_id"], eligible=True)
+        connection.execute("UPDATE incidents SET assignee_id = ? WHERE id = ? AND organization_id = ?",
+                           (update.assignee_id, incident_id, user["organization_id"]))
+        row = connection.execute(INCIDENT_SELECT + "WHERE i.id = ? AND i.organization_id = ?",
+                                 (incident_id, user["organization_id"])).fetchone()
+    return dict(row)
+
+
+@app.patch("/risks/{risk_id}/assignee", response_model=Risk)
+def assign_risk(risk_id: int, update: AssigneeUpdate,
+                user: dict = Depends(require_roles("administrador"))):
+    with closing(connect()) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        if connection.execute("SELECT id FROM risks WHERE id = ? AND organization_id = ?",
+                              (risk_id, user["organization_id"])).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Risk not found")
+        require_assignee(connection, update.assignee_id, user["organization_id"], eligible=True)
+        connection.execute("UPDATE risks SET assignee_id = ? WHERE id = ? AND organization_id = ?",
+                           (update.assignee_id, risk_id, user["organization_id"]))
+        row = connection.execute(RISK_SELECT + "WHERE r.id = ? AND r.organization_id = ?",
+                                 (risk_id, user["organization_id"])).fetchone()
+    return public_risk(row)
 
 
 @app.post("/users", status_code=201)
@@ -648,6 +726,7 @@ def create_risk(risk: RiskCreate, user: dict = Depends(require_roles("administra
 @app.get("/risks", response_model=list[Risk])
 def list_risks(status: RiskStatus | None = None, level: RiskLevel | None = None,
                asset_id: Annotated[int | None, Query(gt=0)] = None,
+               assignee_id: Annotated[int | None, Query(gt=0)] = None,
                user: dict = Depends(require_user)):
     conditions = ["r.organization_id = ?"]
     parameters = [user["organization_id"]]
@@ -660,8 +739,12 @@ def list_risks(status: RiskStatus | None = None, level: RiskLevel | None = None,
     if asset_id is not None:
         conditions.append("r.asset_id = ?")
         parameters.append(asset_id)
+    if assignee_id is not None:
+        conditions.append("r.assignee_id = ?")
+        parameters.append(assignee_id)
     with closing(connect()) as connection:
         require_risk_asset(connection, asset_id, user["organization_id"])
+        require_assignee(connection, assignee_id, user["organization_id"])
         rows = connection.execute(RISK_SELECT + "WHERE " + " AND ".join(conditions) + " ORDER BY r.id",
                                   parameters).fetchall()
     return [public_risk(row) for row in rows]
@@ -806,7 +889,7 @@ def create_incident(
                 created_at, user["organization_id"],
             ),
         )
-        row = connection.execute("SELECT * FROM incidents WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        row = connection.execute(INCIDENT_SELECT + "WHERE i.id = ?", (cursor.lastrowid,)).fetchone()
     return dict(row)
 
 
@@ -819,7 +902,7 @@ def update_incident_status(
     with closing(connect()) as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
-            "SELECT * FROM incidents WHERE id = ? AND organization_id = ?",
+            INCIDENT_SELECT + "WHERE i.id = ? AND i.organization_id = ?",
             (incident_id, user["organization_id"]),
         ).fetchone()
         if row is None:
@@ -841,7 +924,7 @@ def update_incident_status(
                 ),
             )
         row = connection.execute(
-            "SELECT * FROM incidents WHERE id = ? AND organization_id = ?",
+            INCIDENT_SELECT + "WHERE i.id = ? AND i.organization_id = ?",
             (incident_id, user["organization_id"]),
         ).fetchone()
     return dict(row)
@@ -922,21 +1005,26 @@ def list_incident_notes(incident_id: int, user: dict = Depends(require_user)):
 def list_incidents(
     status: Literal["open", "investigating", "resolved"] | None = None,
     severity: Literal["low", "medium", "high", "critical"] | None = None,
+    assignee_id: Annotated[int | None, Query(gt=0)] = None,
     user: dict = Depends(require_user),
 ):
-    conditions = ["organization_id = ?"]
+    conditions = ["i.organization_id = ?"]
     parameters = [user["organization_id"]]
     if status is not None:
-        conditions.append("status = ?")
+        conditions.append("i.status = ?")
         parameters.append(status)
     if severity is not None:
-        conditions.append("severity = ?")
+        conditions.append("i.severity = ?")
         parameters.append(severity)
-    query = "SELECT * FROM incidents"
+    if assignee_id is not None:
+        conditions.append("i.assignee_id = ?")
+        parameters.append(assignee_id)
+    query = INCIDENT_SELECT
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY id"
+    query += " ORDER BY i.id"
     with closing(connect()) as connection:
+        require_assignee(connection, assignee_id, user["organization_id"])
         rows = connection.execute(query, parameters).fetchall()
     return [dict(row) for row in rows]
 
@@ -945,7 +1033,7 @@ def list_incidents(
 def get_incident(incident_id: int, user: dict = Depends(require_user)):
     with closing(connect()) as connection:
         row = connection.execute(
-            "SELECT * FROM incidents WHERE id = ? AND organization_id = ?",
+            INCIDENT_SELECT + "WHERE i.id = ? AND i.organization_id = ?",
             (incident_id, user["organization_id"]),
         ).fetchone()
     if row is None:

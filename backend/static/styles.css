@@ -7,3 +7,5 @@
 .risk-summary{grid-column:1/-1;margin:0;font-size:.875rem}.risk{min-width:0}#risk-filter-form{flex-wrap:wrap}
 
 #associated-controls{margin-top:28px;border-top:1px solid var(--border);padding-top:24px}#associated-list li{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}#associated-list span{min-width:0;flex:1;overflow-wrap:anywhere}#associated-list button{flex-shrink:0}#associated-form{margin-top:20px}
+
+.assignee-form{display:flex;align-items:end;gap:12px;flex-wrap:wrap}.assignee-form label{flex:1;min-width:160px}.assignee-section{margin-top:24px}#filter-form{flex-wrap:wrap}

@@ -223,3 +223,32 @@ without mutation controls. Linking documents a measure and does not calculate
 residual risk, change the initial score or prove effectiveness. Automated tests
 cover API, concurrency, persistence, migration preservation and database integrity;
 Chrome exercises the UI, role visibility, safe text, feedback and mobile widths.
+
+## Assignment workflow
+
+`GET /assignees` allows all authenticated roles and returns only ID/display_name
+for active administrators/analysts in the session organization. General user
+administration remains restricted to administrators. Assignment PATCH routes on
+incidents and risks require the administrator dependency and existing CSRF checks.
+The body requires an explicit strict positive integer or null assignee_id, rejects
+booleans and extra fields, and the routes return the updated resource with `200`.
+
+`BEGIN IMMEDIATE` serializes resource/user checks and writes. Missing/foreign
+resources or users give `404`, own inactive/reader users give `422`. Queries and
+updates bind all input. Read responses include nullable assignee_id/assignee_name;
+list filters combine assignee_id with the existing predicates using AND. Foreign
+or missing filter-user IDs return `404`; an own user without assignments yields `[]`.
+
+Migration 008 adds nullable foreign keys and database triggers enforcing same-tenant
+eligible assignees on insert/update and guarding user organization changes. A user
+deactivation or change to reader clears both resource collections through a trigger
+within the existing user-update transaction. Failures roll back the user and all
+cleanup; reactivation does not reconstruct assignments. No notifications, messages
+or general audit records are generated.
+
+The UI loads only the minimal candidate endpoint for selectors and filters, shows
+read-only assignment information to non-administrators and safely renders names.
+Request versions discard stale responses. User management refreshes visible
+assignments and candidates after eligibility changes. Tests inject a failure into
+risk cleanup after incident cleanup to verify complete rollback, in addition to
+API validation, isolation, persistence and browser desktop/mobile flows.

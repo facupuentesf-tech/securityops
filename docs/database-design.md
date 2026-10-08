@@ -6,7 +6,7 @@ The local version uses SQLite, by default at `backend/securityops.db`. The
 default path is relative to the backend module and can be overridden with
 `SECURITYOPS_DATABASE`. Numbered SQL migrations in `backend/migrations` are
 tracked in `schema_migrations`; database files are excluded from Git.
-Migrations 001–007 preserve existing incident, history, note, user and session
+Migrations 001–008 preserve existing incident, history, note, user and session
 data while assigning existing users and incidents to the initial organization.
 
 ## Implemented Schema
@@ -155,8 +155,8 @@ browser's timezone. Incident, history, note and asset data survive server restar
 
 Asset editing and deletion, risk/control extensions and general audit logs remain future work.
 Multi-organization isolation is implemented for the current asset, incident and user
-operations. Incident links use the separate `incident_assets` table; `assigned_to` remains
-a planned extension. PostgreSQL remains a possible
+operations. Incident links use `incident_assets`; responsible users use `assignee_id`.
+PostgreSQL remains a possible
 later database.
 
 The planned entities are:
@@ -216,7 +216,7 @@ Main fields:
 - description
 - severity
 - status
-- assigned_to
+- assignee_id (implemented, nullable)
 - created_at
 
 ### Audit Logs
@@ -280,8 +280,8 @@ Score and level are derived on the server, not stored: `probability * impact`.
 The prototype's own matrix is low 1–4, medium 5–9, high 10–16, critical 17–25.
 These thresholds are a local convention rather than an external standard.
 SQLite checks storage type and range; JSON booleans and coercible strings/floats
-are rejected by strict API validation. No risk editing/deletion,
-owner assignment or residual evaluation is implemented.
+are rejected by strict API validation. Risk editing/deletion and residual evaluation
+remain deferred. Risk assignees are implemented by migration 008.
 
 ## Security controls and risk associations (migration 007)
 
@@ -311,3 +311,24 @@ records. Preservation tests include users, sessions, incidents, history, notes,
 assets, incident-asset links, risks and existing autoincrement sequences.
 Links store no residual assessment or effectiveness claim and never update risk
 probability, impact, score or level. Control editing/deletion remains future work.
+
+## Assignees (migration 008)
+
+`incidents.assignee_id` and `risks.assignee_id` are nullable INTEGER foreign keys
+to `users(id)`, initially null for all existing rows. Migration 008 uses ALTER
+TABLE and adds `(organization_id, assignee_id, id)` indexes without rebuilding
+tables or changing prior columns, records, links or sequences.
+
+BEFORE INSERT and BEFORE UPDATE OF assignee_id/organization_id triggers on each
+resource require a non-null assignee to be active, administrator/analyst and in
+the same organization. A BEFORE UPDATE OF organization_id trigger on users
+prevents moving an assigned user across organizations. These database checks
+protect both directions of the relationship, including direct SQL writes.
+
+An AFTER UPDATE OF is_active/role trigger on users clears incident and risk
+assignments in the user's organization when the new account is inactive or reader.
+It executes inside the user-update transaction. If either collection fails to
+update, the user and all assignment changes roll back. Clearing assignments never
+deletes resources, notes, history or links, and later reactivation does not restore
+them. A referenced user cannot be deleted while assignments exist. Display names
+are obtained through organization-scoped joins, not duplicated in these tables.

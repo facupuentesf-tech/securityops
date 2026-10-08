@@ -23,6 +23,25 @@ sys.path.insert(0, str(BACKEND))
 import main as app_main
 
 
+def rewind_assignee_migration(connection):
+    """Restore a pre-008 schema in a disposable migration-test database."""
+    for trigger in ("incidents_assignee_insert", "incidents_assignee_update",
+                    "risks_assignee_insert", "risks_assignee_update",
+                    "users_assignee_organization_update", "users_clear_ineligible_assignments"):
+        connection.execute(f"DROP TRIGGER {trigger}")
+    connection.execute("DROP INDEX idx_incidents_organization_assignee")
+    connection.execute("DROP INDEX idx_risks_organization_assignee")
+    connection.execute("ALTER TABLE incidents DROP COLUMN assignee_id")
+    connection.execute("ALTER TABLE risks DROP COLUMN assignee_id")
+    connection.execute("DELETE FROM schema_migrations WHERE version = 8")
+
+
+def legacy_snapshot(connection, table):
+    """Compare all pre-assignee columns when testing older migrations."""
+    columns = [row[1] for row in connection.execute(f"PRAGMA table_info({table})") if row[1] != "assignee_id"]
+    return [tuple(row) for row in connection.execute(f"SELECT {', '.join(columns)} FROM {table} ORDER BY 1")]
+
+
 class IncidentTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -442,7 +461,7 @@ class IncidentTests(unittest.TestCase):
         with closing(sqlite3.connect(self.database)) as connection:
             self.assertEqual(
                 connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(),
-                [(1,), (2,), (3,), (4,), (5,), (6,), (7,)],
+                [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,)],
             )
             self.assertEqual(
                 connection.execute("SELECT organization_id FROM incidents WHERE id = 17").fetchone()[0],
@@ -1110,6 +1129,7 @@ class IncidentTests(unittest.TestCase):
         self.request("POST", f'/incidents/{incident["id"]}/notes', {"content": "Preserved note"})
         self.stop_server()
         with closing(sqlite3.connect(self.database)) as connection, connection:
+            rewind_assignee_migration(connection)
             connection.execute("DROP TABLE risk_controls")
             connection.execute("DROP TABLE security_controls")
             connection.execute("DROP INDEX idx_risks_id_organization")
@@ -1122,12 +1142,12 @@ class IncidentTests(unittest.TestCase):
             connection.execute("DROP TABLE assets")
             connection.execute("DELETE FROM schema_migrations WHERE version = 4")
             tables = ("organizations", "users", "sessions", "incidents", "incident_status_history", "incident_notes")
-            before = {table: connection.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() for table in tables}
+            before = {table: legacy_snapshot(connection, table) for table in tables}
         self.start_server()
         with closing(sqlite3.connect(self.database)) as connection:
-            after = {table: connection.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() for table in tables}
+            after = {table: legacy_snapshot(connection, table) for table in tables}
             self.assertEqual(before, after)
-            self.assertEqual(connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(), [(1,), (2,), (3,), (4,), (5,), (6,), (7,)])
+            self.assertEqual(connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(), [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,)])
         code, asset = self.request("POST", "/assets", self.asset_payload(description="Persistent asset"))
         self.assertEqual(code, 201)
         self.stop_server()
@@ -1234,6 +1254,7 @@ class IncidentTests(unittest.TestCase):
         self.stop_server()
         tables = ("organizations", "users", "sessions", "incidents", "assets", "incident_notes", "incident_status_history")
         with closing(app_main.connect()) as connection, connection:
+            rewind_assignee_migration(connection)
             connection.execute("DROP TABLE risk_controls")
             connection.execute("DROP TABLE security_controls")
             connection.execute("DROP INDEX idx_risks_id_organization")
@@ -1244,11 +1265,11 @@ class IncidentTests(unittest.TestCase):
             connection.execute("DROP INDEX idx_incidents_id_organization")
             connection.execute("DROP INDEX idx_assets_id_organization")
             connection.execute("DELETE FROM schema_migrations WHERE version = 5")
-            before = {table: connection.execute(f"SELECT * FROM {table}").fetchall() for table in tables}
+            before = {table: legacy_snapshot(connection, table) for table in tables}
         app_main.migrate_database()
         app_main.migrate_database()
         with closing(app_main.connect()) as connection:
-            after = {table: connection.execute(f"SELECT * FROM {table}").fetchall() for table in tables}
+            after = {table: legacy_snapshot(connection, table) for table in tables}
             self.assertEqual(before, after)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM incident_assets").fetchone()[0], 0)
         self.start_server()

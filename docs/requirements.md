@@ -158,8 +158,8 @@ Each incident should have:
 - Responsible person
 - Date
 
-Description, severity, status and date are implemented. Responsible-person
-assignment remains a planned extension. General audit logs,
+Description, severity, status, date and optional responsible-person assignment
+are implemented. General audit logs,
 reports, dashboards and security documentation management also remain future
 work. Multi-organization isolation is implemented; shared deployment is not.
 
@@ -209,7 +209,7 @@ preservation and restart persistence; Chrome smoke checks cover the interface.
 - The responsive Spanish section provides list, filters, creation and detail,
   optional organization asset selection, safe text rendering and loading/empty/error
   feedback. Data persists across server restarts.
-- Editing, deletion, owner assignment and residual evaluation remain future work.
+- Editing, deletion and residual evaluation remain future work; risk assignees are implemented.
 
 ## Initial security controls (implemented)
 
@@ -236,3 +236,32 @@ preservation and restart persistence; Chrome smoke checks cover the interface.
   loading, empty, error and retry feedback.
 - Association documents a measure, does not change score/level or demonstrate
   effectiveness. Residual evaluation and control editing/deletion remain pending.
+
+## Incident and risk assignees (implemented)
+
+- Each resource has an optional assignee: an active administrator or analyst in
+  the same organization. New and migrated records start unassigned.
+- `PATCH /incidents/{incident_id}/assignee` and `PATCH /risks/{risk_id}/assignee`
+  accept an explicit `{"assignee_id": ID}` or null and return the updated resource.
+- Only administrators assign/reassign/clear. Analysts/readers can query the
+  information and minimal candidate list according to existing read permissions.
+- Missing fields, booleans, strings, floats, nonpositive IDs and extra fields give
+  `422`. Missing/foreign resource or user IDs give `404`; own inactive/reader user
+  IDs give `422`. Existing authentication, CSRF and bound SQL apply.
+- `GET /assignees` returns only id/display_name for eligible organization users,
+  ordered by ID, or `[]`. It exposes no email, role, password, session or tenant data.
+- Resource responses include assignee_id and assignee_name, null when unassigned.
+  Creation payloads reject assignment fields, preventing non-admin assignment.
+- `assignee_id` list filters combine with all existing filters using AND; no
+  matches gives `[]`. Missing/foreign filter users give `404`. Existing own users
+  without assignments give `[]` even if no longer eligible.
+- Migration 008 preserves all prior data and protects same-organization eligible
+  assignments with foreign keys and database triggers.
+- Deactivating or converting a user to reader clears all current incident/risk
+  assignments in the same transaction; any failure rolls back both the user and
+  all assignments. Resources and other relations are retained. Reactivation does
+  not restore prior assignments.
+- The responsive Spanish detail UI shows the assignee or “Sin asignar”, offers
+  administrator-only selectors/actions, uses minimal candidates for filters, safely
+  renders names and shows loading/error/empty feedback with retries.
+- No notifications/messages or general audit module are included.

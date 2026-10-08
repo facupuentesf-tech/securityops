@@ -69,6 +69,8 @@ The implemented role permissions are:
 | Create assets | Yes | Yes | No |
 | Read risks | Yes | Yes | Yes |
 | Create risks | Yes | Yes | No |
+| Read assignees and eligible candidates | Yes | Yes | Yes |
+| Assign, reassign and clear assignees | Yes | No | No |
 | Read controls and risk-control links | Yes | Yes | Yes |
 | Create controls, link and unlink | Yes | Yes | No |
 | Link and unlink incident assets | Yes | Yes | No |
@@ -84,7 +86,7 @@ for shared deployment.
 
 The following entities and relationships preserve the original vision.
 Asset extensions, risk/control extensions and general audit logs remain future work.
-Responsible users for incidents remain future work.
+Responsible users for incidents and risks are implemented.
 
 The planned domain entities are:
 
@@ -213,3 +215,19 @@ or any other relationship. All control states may be associated to document the
 measure's current state. The association alone neither changes initial risk score
 and level nor proves efficacy. No residual assessment, control editing or control
 deletion is implemented.
+
+## Optional responsible users
+
+Each incident and risk may reference one responsible account, or remain unassigned.
+Only active administrators and analysts in the resource's organization are eligible.
+Administrators assign/reassign/clear; the other roles view according to their existing
+resource permissions. Candidate lookup reveals only ID and display name for eligible
+accounts. Names are read from the current account and rendered as safe text.
+
+Assignment is distinct from the authors of notes/history and does not modify status,
+history, notes, asset/control links, probability, impact or score. Deactivation or a
+role change to reader clears the user's assignments atomically with the account
+update. Any failure reverses the whole operation. Reactivation never reconstructs
+responsibility automatically. Foreign-organization assignments and organization
+changes that would invalidate a current assignment are prevented by the database.
+No notifications or general audit events are introduced.

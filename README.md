@@ -18,6 +18,7 @@ compartido.
 ### Funciones implementadas
 
 - Crear, listar y consultar incidentes.
+- Asignar responsables opcionales a incidentes y riesgos, con filtros por responsable.
 - Crear, listar y consultar riesgos, con evaluación inicial y activo opcional.
 - Crear, listar y consultar controles de seguridad y vincularlos con riesgos.
 - Vincular varios activos por incidente y quitar vínculos sin borrar recursos.
@@ -49,6 +50,8 @@ compartido.
 | Crear activos | Sí | Sí | No |
 | Consultar riesgos | Sí | Sí | Sí |
 | Crear riesgos | Sí | Sí | No |
+| Consultar responsables y candidatos elegibles | Sí | Sí | Sí |
+| Asignar, reasignar y quitar responsables | Sí | No | No |
 | Consultar controles y vínculos con riesgos | Sí | Sí | Sí |
 | Crear controles, vincular y desvincular | Sí | Sí | No |
 | Vincular y desvincular activos de incidentes | Sí | Sí | No |
@@ -66,7 +69,6 @@ Aún no están implementados:
 - Edición, eliminación y asignación de responsables de activos
 - Edición y eliminación de riesgos y evaluación residual
 - Edición y eliminación de controles de seguridad, evaluación de eficacia
-- Ampliación de incidentes con responsables
 - Auditoría general más allá del historial de incidentes
 - Reportes
 - Dashboard
@@ -581,3 +583,85 @@ desvinculación, aislamiento en ambas direcciones y restricciones de SQL directo
 También comparan todos los datos previos y secuencias de IDs al migrar y comprueban
 persistencia tras reiniciar. Chrome verifica los flujos, lector, textos seguros,
 errores de red y anchos 1280/390 con una base temporal.
+
+## Responsables de incidentes y riesgos
+
+Cada incidente y riesgo puede tener un responsable opcional. Solo los
+administradores pueden asignar, reasignar o quitar responsables. Analistas y
+lectores consultan la información y filtran los listados según sus permisos.
+Los candidatos son usuarios activos, administradores o analistas, de la misma
+organización. El cliente no selecciona la organización.
+
+| Método | Ruta | Resultado |
+| --- | --- | --- |
+| GET | `/assignees` | Candidatos elegibles ordenados por ID; solo `id` y `display_name`, o `[]` |
+| PATCH | `/incidents/{incident_id}/assignee` | Devuelve el incidente actualizado con `200` |
+| PATCH | `/risks/{risk_id}/assignee` | Devuelve el riesgo actualizado con `200` |
+
+Asignar o reasignar: `{"assignee_id": 1}`. Quitar: `{"assignee_id": null}`.
+El campo es obligatorio: omitirlo, enviar booleanos, cadenas, decimales, IDs no
+positivos o campos extra recibe `422`. Recurso o usuario inexistente o ajeno
+recibe `404`; usuario propio inactivo o lector recibe `422`. Las escrituras
+requieren sesión de administrador y `X-CSRF-Token`. Usuarios anónimos reciben
+`401` y otros roles o CSRF inválido reciben `403`.
+
+Las respuestas de creación, listado, detalle y cambio de estado de incidentes,
+y de creación, listado y detalle de riesgos, incluyen `assignee_id` y
+`assignee_name`: ambos null cuando no hay responsable. El nombre se consulta
+desde la cuenta actual. La creación no acepta asignaciones: se usa el PATCH de
+administrador. Cambiar el responsable no altera estado, historial, notas,
+vínculos, probabilidad, impacto ni puntaje.
+
+`GET /incidents?assignee_id=1` combina el responsable con `status` y `severity`.
+`GET /risks?assignee_id=1` lo combina con `status`, `level` y `asset_id`, siempre
+con AND. Sin coincidencias devuelve `[]`. Usuario de filtro inexistente o ajeno
+recibe `404`; un usuario propio sin asignaciones, incluso si ya no es elegible,
+produce `[]`. Omitir `assignee_id` consulta todos los responsables. La interfaz
+usa únicamente los candidatos permitidos para sus filtros.
+
+La migración **008** agrega `assignee_id` nullable e índices en ambas tablas;
+todos los registros existentes quedan inicialmente sin asignar. Las claves
+foráneas a usuarios y triggers de inserción/actualización protegen elegibilidad y
+pertenencia a la organización. También se impide mover a otra organización un
+usuario que tenga asignaciones.
+
+Al desactivar un usuario o convertirlo en lector, un trigger limpia sus
+asignaciones de incidentes y riesgos en la misma transacción de la actualización.
+Un fallo revierte tanto el usuario como todas las asignaciones. Los recursos y
+sus vínculos se conservan; reactivar o devolver el rol analista no reconstruye
+las asignaciones anteriores. Esta protección funciona también en SQL directo.
+Se mantienen SQL parametrizado, autenticación y CSRF. La asignación no genera
+notificaciones ni mensajes; la auditoría general queda pendiente.
+
+En los detalles se muestra el nombre o **Sin asignar**. Los administradores ven
+selector, **Asignar responsable** y **Quitar responsable**; otros roles solo la
+información. La interfaz conserva diseño adaptable, texto seguro y mensajes de
+carga, error y ausencia de candidatos, con reintentos. Al gestionar usuarios se
+actualizan candidatos, filtros y asignaciones visibles.
+
+Comprobación manual:
+
+1. Ingresar como administrador. Crear un analista y un lector; el selector y
+   `/assignees` deben incluir al administrador y al analista, sin correo, rol ni
+   otros datos. Abrir un incidente y un riesgo: inicialmente **Sin asignar**.
+2. Asignar el analista, reasignar al administrador y quitar la asignación en ambos
+   detalles. Revisar que estado, puntaje y vínculos sigan intactos; repetir en
+   ancho móvil y con un nombre que contenga HTML.
+3. Asignar varios recursos al analista y combinar los filtros por responsable
+   con los existentes. Probar una combinación vacía y limpiar los filtros.
+4. Convertirlo en lector o desactivarlo desde **Usuarios**: todos sus incidentes
+   y riesgos deben quedar sin asignar, sin perder recursos ni otros vínculos.
+   Reactivarlo no debe restaurar las asignaciones anteriores.
+5. Ingresar como analista o lector: consultar responsables y filtros sin acciones
+   de asignación. Desde otra organización, consultar/asignar IDs ajenos recibe
+   `404`. En `/docs`, comprobar booleanos, campo ausente y usuario inactivo (`422`)
+   usando cookie y cabecera CSRF para PATCH.
+6. Reiniciar y verificar persistencia. Interrumpir la conexión y comprobar
+   mensajes y reintentos en candidatos y asignación.
+
+Las pruebas usan bases temporales, verifican conservación de todos los módulos
+al migrar, persistencia, permisos, aislamiento, SQL directo, desactivación y cambio
+a lector. Un fallo provocado en la limpieza de riesgos comprueba la reversión
+completa del usuario y de ambas colecciones. Chrome comprueba asignación,
+reasignación, eliminación, filtros, limpieza desde Usuarios, lector, texto seguro,
+errores y anchos 1280/390.

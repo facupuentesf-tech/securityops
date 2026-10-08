@@ -252,6 +252,75 @@ async function poll(fn) {
   await wait(`document.querySelectorAll('#associated-list li').length === 2`);
   await command('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
   assert.equal(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`),true);
+  await evaluate(`(() => {const f=document.getElementById('user-create-form');f.elements.display_name.value=${JSON.stringify(payload)};f.elements.email.value='assigned-analyst@example.test';f.elements.password.value='assigned analyst password';f.elements.role.value='analista';f.requestSubmit();})()`);
+  await wait(`document.getElementById('user-list').textContent.includes('assigned-analyst@example.test') && !document.getElementById('incident-filter-assignee').disabled`);
+  const analystId = await evaluate(`Array.from(document.getElementById('incident-filter-assignee').options).find(option=>option.textContent === ${JSON.stringify(payload)}).value`);
+  await evaluate(`(() => {const f=document.getElementById('user-create-form');f.elements.display_name.value='Replacement Analyst';f.elements.email.value='replacement@example.test';f.elements.password.value='replacement analyst password';f.elements.role.value='analista';f.requestSubmit();})()`);
+  await wait(`document.getElementById('user-list').textContent.includes('replacement@example.test') && !document.getElementById('risk-filter-assignee').disabled`);
+  const replacementId = await evaluate(`Array.from(document.getElementById('risk-filter-assignee').options).find(option=>option.textContent === 'Replacement Analyst').value`);
+  await evaluate(`document.querySelector('#incident-list .incident-title').click()`);
+  await wait(`!document.getElementById('incident-assignee-form').hidden && document.getElementById('incident-assignee-select').options.length === 4`);
+  assert.equal(await evaluate(`document.getElementById('incident-assignee-name').textContent`),'Sin asignar');
+  for (const id of [analystId, replacementId]) {
+    await evaluate(`document.getElementById('incident-assignee-select').value=${JSON.stringify(id)};document.getElementById('incident-assignee-form').requestSubmit()`);
+    await wait(`!document.getElementById('incident-assignee-form').hidden && !document.getElementById('incident-assignee-select').disabled && document.getElementById('incident-assignee-select').value === ${JSON.stringify(id)}`);
+  }
+  await evaluate(`document.getElementById('incident-assignee-clear').click()`);
+  await wait(`document.getElementById('incident-assignee-name').textContent === 'Sin asignar' && !document.getElementById('incident-assignee-form').hidden`);
+  await evaluate(`document.getElementById('incident-assignee-select').value=${JSON.stringify(analystId)};document.getElementById('incident-assignee-form').requestSubmit()`);
+  await wait(`document.getElementById('incident-assignee-name').textContent.includes(${JSON.stringify(payload)}) && !document.getElementById('incident-assignee-form').hidden`);
+  assert.equal(await evaluate(`!document.querySelector('#incident-assignee-name img') && !window.xss`),true);
+  await evaluate(`document.querySelector('.risk-title').click()`);
+  await wait(`!document.getElementById('risk-assignee-form').hidden`);
+  for (const id of [analystId, replacementId]) {
+    await evaluate(`document.getElementById('risk-assignee-select').value=${JSON.stringify(id)};document.getElementById('risk-assignee-form').requestSubmit()`);
+    await wait(`!document.getElementById('risk-assignee-form').hidden && !document.getElementById('risk-assignee-select').disabled && document.getElementById('risk-assignee-select').value === ${JSON.stringify(id)}`);
+  }
+  await evaluate(`document.getElementById('risk-assignee-clear').click()`);
+  await wait(`document.getElementById('risk-assignee-name').textContent === 'Sin asignar' && !document.getElementById('risk-assignee-form').hidden`);
+  await evaluate(`document.getElementById('risk-assignee-select').value=${JSON.stringify(analystId)};document.getElementById('risk-assignee-form').requestSubmit()`);
+  await wait(`document.getElementById('risk-assignee-name').textContent.includes(${JSON.stringify(payload)}) && !document.getElementById('risk-assignee-form').hidden`);
+  await command('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+  assert.equal(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`),true);
+  await evaluate(`document.getElementById('back-button').click()`);
+  await wait(`document.querySelectorAll('#incident-list .incident').length === 1`);
+  await evaluate(`document.getElementById('incident-filter-assignee').value=${JSON.stringify(analystId)};document.getElementById('filter-form').elements.status.value='investigating';document.getElementById('filter-form').elements.severity.value='high';document.getElementById('filter-form').requestSubmit()`);
+  await wait(`document.querySelectorAll('#incident-list .incident').length === 1`);
+  await evaluate(`document.getElementById('incident-filter-assignee').value=${JSON.stringify(replacementId)};document.getElementById('filter-form').requestSubmit()`);
+  await wait(`document.getElementById('list-feedback').textContent.includes('coincidan')`);
+  await evaluate(`document.getElementById('clear-filters').click();document.getElementById('risk-back-button').click()`);
+  await wait(`document.querySelectorAll('#risk-list .risk').length === 2`);
+  await evaluate(`(() => {const f=document.getElementById('risk-filter-form');f.elements.status.value='treating';f.elements.level.value='critical';f.elements.asset_id.value=f.elements.asset_id.options[1].value;f.elements.assignee_id.value=${JSON.stringify(analystId)};f.requestSubmit();})()`);
+  await wait(`document.querySelectorAll('#risk-list .risk').length === 1`);
+  await evaluate(`document.getElementById('risk-filter-assignee').value=${JSON.stringify(replacementId)};document.getElementById('risk-filter-form').requestSubmit()`);
+  await wait(`document.getElementById('risk-list-feedback').textContent.includes('coincidan')`);
+  await evaluate(`document.getElementById('clear-risk-filters').click()`);
+  await wait(`document.querySelectorAll('#risk-list .risk').length === 2`);
+  await evaluate(`document.querySelector('.risk-title').click();document.querySelector('#incident-list .incident-title').click()`);
+  await wait(`!document.getElementById('risk-assignee-form').hidden && !document.getElementById('incident-assignee-form').hidden`);
+  await evaluate(`window.fetch=async(path,options)=>{if(path.endsWith('/assignee') && options?.method === 'PATCH')throw new TypeError('offline');return window.originalFetch(path,options);};document.getElementById('risk-assignee-clear').click()`);
+  await wait(`document.getElementById('message').textContent.includes('No se pudo conectar') && !document.getElementById('risk-assignee-form').hidden`);
+  assert.equal(await evaluate(`document.getElementById('risk-assignee-name').textContent.includes(${JSON.stringify(payload)})`),true);
+  await evaluate(`window.fetch=async()=>{throw new TypeError('offline')};document.getElementById('risk-assignee-retry').click()`);
+  await wait(`document.getElementById('risk-assignee-feedback').textContent.includes('No se pudo conectar')`);
+  await evaluate(`window.fetch=window.originalFetch;document.getElementById('risk-assignee-retry').click()`);
+  await wait(`!document.getElementById('risk-assignee-form').hidden`);
+  await command('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
+  // Demotion and deactivation refresh both assignment displays and candidate filters.
+  await evaluate(`(() => {const row=Array.from(document.querySelectorAll('.user-item')).find(row=>row.textContent.includes('assigned-analyst@example.test'));const f=row.querySelector('.user-edit-form');f.elements.role.value='lector';f.requestSubmit();})()`);
+  await wait(`document.getElementById('risk-assignee-name').textContent === 'Sin asignar' && document.getElementById('incident-assignee-name').textContent === 'Sin asignar' && !Array.from(document.getElementById('risk-filter-assignee').options).some(option=>option.value === ${JSON.stringify(analystId)})`);
+  for (const prefix of ['incident','risk']) {
+    await wait(`!document.getElementById('${prefix}-assignee-form').hidden`);
+    await evaluate(`document.getElementById('${prefix}-assignee-select').value=${JSON.stringify(replacementId)};document.getElementById('${prefix}-assignee-form').requestSubmit()`);
+    await wait(`document.getElementById('${prefix}-assignee-name').textContent.includes('Replacement Analyst') && !document.getElementById('${prefix}-assignee-form').hidden`);
+  }
+  await evaluate(`(() => {const row=Array.from(document.querySelectorAll('.user-item')).find(row=>row.textContent.includes('replacement@example.test'));const f=row.querySelector('.user-edit-form');f.elements.is_active.value='false';f.requestSubmit();})()`);
+  await wait(`document.getElementById('risk-assignee-name').textContent === 'Sin asignar' && document.getElementById('incident-assignee-name').textContent === 'Sin asignar' && !Array.from(document.getElementById('incident-filter-assignee').options).some(option=>option.value === ${JSON.stringify(replacementId)})`);
+  for (const prefix of ['incident','risk']) {
+    await wait(`!document.getElementById('${prefix}-assignee-form').hidden`);
+    await evaluate(`document.getElementById('${prefix}-assignee-select').value='1';document.getElementById('${prefix}-assignee-form').requestSubmit()`);
+    await wait(`document.getElementById('${prefix}-assignee-name').textContent.includes('Test Administrator') && !document.getElementById('${prefix}-assignee-form').hidden`);
+  }
   await evaluate(`(() => {const f=document.getElementById('user-create-form');f.elements.display_name.value='Smoke Reader';f.elements.email.value='smoke-reader@example.test';f.elements.password.value='smoke reader password';f.elements.role.value='lector';f.requestSubmit();})()`);
   await wait(`document.getElementById('user-list').textContent.includes('smoke-reader@example.test')`);
   await evaluate(`document.getElementById('logout-button').click()`);
@@ -283,6 +352,8 @@ async function poll(fn) {
   await evaluate(`document.querySelector('.risk-title').click()`);
   await wait(`!document.getElementById('risk-detail-content').hidden`);
   assert.equal(await evaluate(`document.getElementById('risk-detail-level').textContent`),'Nivel crítico');
+  await wait(`document.getElementById('risk-assignee-name').textContent.includes('Test Administrator') && document.getElementById('incident-assignee-name').textContent.includes('Test Administrator')`);
+  assert.equal(await evaluate(`document.getElementById('risk-assignee-form').hidden && document.getElementById('incident-assignee-form').hidden`),true);
   await wait(`document.querySelectorAll('#associated-list li').length === 2`);
   assert.equal(await evaluate(`document.getElementById('associated-form').hidden && !document.querySelector('#associated-list button')`),true);
   await wait(`document.querySelectorAll('#control-list .control').length === 2`);
@@ -290,7 +361,7 @@ async function poll(fn) {
   await evaluate(`document.querySelector('.control-name').click()`);
   await wait(`!document.getElementById('control-detail-content').hidden`);
   assert.equal(await evaluate(`document.getElementById('control-detail-name').textContent`),payload);
-  console.log('OK: login/logout, administración de usuarios, lector, incidentes, activos, riesgos, controles, vínculos, historial, notas, filtros, XSS, fechas locales, errores de red, /docs y anchos 1280/390.');
+  console.log('OK: login/logout, administración de usuarios, lector, responsables, limpieza de asignaciones, incidentes, activos, riesgos, controles, vínculos, historial, notas, filtros, XSS, fechas locales, errores de red, /docs y anchos 1280/390.');
   await command('Browser.close');
 })().catch(error => { console.error(error);process.exitCode=1; }).finally(async () => {
   if(socket && socket.readyState===WebSocket.OPEN) {

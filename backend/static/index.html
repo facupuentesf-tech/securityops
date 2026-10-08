@@ -35,7 +35,8 @@
       </section>
       <section class="panel" aria-labelledby="list-heading">
         <div class="section-heading"><h2 id="list-heading">Registro de incidentes</h2><span id="count" class="muted"></span></div>
-        <form id="filter-form" class="filters"><label>Estado<select name="status"><option value="">Todos los estados</option><option value="open">Abierto</option><option value="investigating">En investigación</option><option value="resolved">Resuelto</option></select></label><label>Severidad<select name="severity"><option value="">Todas las severidades</option><option value="low">Baja</option><option value="medium">Media</option><option value="high">Alta</option><option value="critical">Crítica</option></select></label><button type="submit" class="secondary">Aplicar filtros</button><button id="clear-filters" type="button" class="text-button">Limpiar</button></form>
+        <form id="filter-form" class="filters"><label>Estado<select name="status"><option value="">Todos los estados</option><option value="open">Abierto</option><option value="investigating">En investigación</option><option value="resolved">Resuelto</option></select></label><label>Severidad<select name="severity"><option value="">Todas las severidades</option><option value="low">Baja</option><option value="medium">Media</option><option value="high">Alta</option><option value="critical">Crítica</option></select></label><label>Responsable<select id="incident-filter-assignee" name="assignee_id"><option value="">Todos los responsables</option></select></label><button type="submit" class="secondary">Aplicar filtros</button><button id="clear-filters" type="button" class="text-button">Limpiar</button></form>
+        <p id="incident-assignee-filter-feedback" class="muted" role="status"></p>
         <p id="list-feedback" class="empty" role="status"></p>
         <div id="incident-list" class="incident-list"></div>
       </section>
@@ -45,6 +46,7 @@
       <p id="detail-feedback" class="empty" role="status"></p>
       <div id="detail-content" hidden>
         <div class="page-heading"><div><p id="detail-id" class="eyebrow"></p><h1 id="detail-title" tabindex="-1"></h1><p id="detail-date" class="muted"></p></div><span id="detail-severity" class="badge"></span></div>
+        <section class="panel"><h2>Responsable</h2><p id="incident-assignee-name" class="user-text">Sin asignar</p><p id="incident-assignee-feedback" class="muted" role="status"></p><form id="incident-assignee-form" class="assignee-form" hidden><label>Usuario elegible<select id="incident-assignee-select" required></select></label><button type="submit">Asignar responsable</button><button id="incident-assignee-clear" type="button" class="secondary">Quitar responsable</button></form><button id="incident-assignee-retry" type="button" class="secondary" hidden>Reintentar</button></section>
         <div class="detail-grid">
           <div>
             <section class="panel"><h2>Descripción</h2><p id="detail-description" class="user-text"></p><form id="status-form" class="status-form"><label>Estado<select name="status"><option value="open">Abierto</option><option value="investigating">En investigación</option><option value="resolved">Resuelto</option></select></label><button type="submit">Guardar estado</button></form></section>
@@ -102,13 +104,15 @@
           <label>Estado<select name="status"><option value="">Todos los estados</option><option value="identified">Identificado</option><option value="treating">En tratamiento</option><option value="accepted">Aceptado</option></select></label>
           <label>Nivel<select name="level"><option value="">Todos los niveles</option><option value="low">Bajo</option><option value="medium">Medio</option><option value="high">Alto</option><option value="critical">Crítico</option></select></label>
           <label>Activo<select id="risk-filter-asset" name="asset_id"><option value="">Todos los activos</option></select></label>
+          <label>Responsable<select id="risk-filter-assignee" name="assignee_id"><option value="">Todos los responsables</option></select></label>
           <button type="submit" class="secondary">Aplicar filtros</button><button id="clear-risk-filters" type="button" class="text-button">Limpiar</button>
         </form>
-        <p id="risk-filter-assets-feedback" class="muted" role="status"></p><p id="risk-list-feedback" class="empty" role="status"></p><div id="risk-list" class="incident-list"></div>
+        <p id="risk-assignee-filter-feedback" class="muted" role="status"></p><p id="risk-filter-assets-feedback" class="muted" role="status"></p><p id="risk-list-feedback" class="empty" role="status"></p><div id="risk-list" class="incident-list"></div>
       </section>
       <section id="risk-detail-panel" class="panel" hidden>
         <button id="risk-back-button" type="button" class="text-button">← Volver a riesgos</button><p id="risk-detail-feedback" class="empty" role="status"></p>
         <div id="risk-detail-content" hidden><p id="risk-detail-id" class="eyebrow"></p><h1 id="risk-detail-title" tabindex="-1"></h1><p id="risk-detail-description" class="user-text"></p><p id="risk-detail-matrix" class="user-text"></p><span id="risk-detail-level" class="badge"></span><p id="risk-detail-status"></p><p id="risk-detail-asset" class="user-text"></p><p id="risk-detail-date" class="muted"></p>
+          <section class="assignee-section"><h2>Responsable</h2><p id="risk-assignee-name" class="user-text">Sin asignar</p><p id="risk-assignee-feedback" class="muted" role="status"></p><form id="risk-assignee-form" class="assignee-form" hidden><label>Usuario elegible<select id="risk-assignee-select" required></select></label><button type="submit">Asignar responsable</button><button id="risk-assignee-clear" type="button" class="secondary">Quitar responsable</button></form><button id="risk-assignee-retry" type="button" class="secondary" hidden>Reintentar</button></section>
           <section id="associated-controls" aria-labelledby="associated-heading"><h2 id="associated-heading">Controles asociados</h2><p class="muted">La asociación documenta una medida: no cambia el puntaje del riesgo ni demuestra que el control sea eficaz.</p><p id="associated-feedback" class="muted" role="status"></p><ul id="associated-list" class="notes"></ul><form id="associated-form" hidden><label>Control<select id="associated-select" name="control_id" required></select></label><button type="submit">Vincular control</button></form><button id="associated-retry" type="button" class="secondary" hidden>Reintentar</button></section>
         </div>
       </section>

@@ -62,6 +62,8 @@ prototype with server-enforced tenant isolation. It provides:
   strict probability/impact values, server-derived score/level and AND filters.
 - Security control creation, listing/detail and type/status AND filters, with
   many-to-many risk associations protected by organization in the API and database.
+- Optional incident/risk responsible users, administrator-only assignment and
+  minimal eligible-candidate lookup, with atomic cleanup on user eligibility changes.
 - Status changes with persistent history recorded atomically with the update.
 - Investigation notes with validation and persistent storage.
 - User login/logout, scrypt password hashes, opaque server-side sessions in
@@ -93,7 +95,7 @@ the following capabilities remain future work:
 1. Asset editing, deletion, ownership assignment
 2. Risk editing/deletion and residual evaluation
 3. Security control editing/deletion and effectiveness assessment
-4. Extended incident management with responsible users
+4. Further incident workflow extensions
 5. General audit logs
 6. Dashboard and basic metrics
 
@@ -147,3 +149,18 @@ The relationship documents a measure, preserves the risk score and makes no
 effectiveness claim. Residual evaluation and control editing/deletion remain
 future work. Versioned migration tests verify preservation of prior module data;
 API and Chrome tests cover permissions, isolation, relations and interface flows.
+
+## Responsible-user assignment
+
+Migration 008 preserves existing records and initializes optional incident/risk
+assignees to null. Only active administrators/analysts in the same organization
+are eligible; only administrators may assign or clear. API responses and filters
+include assignment information, while a minimal candidate endpoint exposes only
+ID and name. The responsive Spanish interface provides safe displays, selectors
+and filters reflecting these permissions.
+
+Database guards prevent cross-tenant or ineligible assignments. Deactivation or
+conversion to reader clears both resource collections in the account-update
+transaction, preserving resources and all other relationships. Injected-failure
+tests verify complete rollback. Assignment introduces no notifications/messages;
+general auditing remains future work.
