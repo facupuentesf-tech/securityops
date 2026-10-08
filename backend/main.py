@@ -13,7 +13,7 @@ from getpass import fallback_getpass, getpass
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
@@ -213,6 +213,60 @@ class IncidentAssetCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     asset_id: int = Field(strict=True, gt=0)
+
+
+RiskLevel = Literal["low", "medium", "high", "critical"]
+RiskStatus = Literal["identified", "treating", "accepted"]
+RISK_LEVEL_RANGES = {"low": (1, 4), "medium": (5, 9), "high": (10, 16), "critical": (17, 25)}
+
+
+class RiskCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    description: str | None = None
+    probability: int = Field(strict=True, ge=1, le=5)
+    impact: int = Field(strict=True, ge=1, le=5)
+    status: RiskStatus = "identified"
+    asset_id: int | None = Field(default=None, strict=True, gt=0)
+
+
+class Risk(RiskCreate):
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    created_at: datetime
+    score: int
+    level: RiskLevel
+    asset_name: str | None = None
+
+
+def risk_level(score: int) -> str:
+    for level, (minimum, maximum) in RISK_LEVEL_RANGES.items():
+        if minimum <= score <= maximum:
+            return level
+    raise ValueError("Risk score must be between 1 and 25")
+
+
+def public_risk(row: sqlite3.Row) -> dict:
+    risk = dict(row)
+    risk["score"] = risk["probability"] * risk["impact"]
+    risk["level"] = risk_level(risk["score"])
+    return risk
+
+
+RISK_SELECT = (
+    "SELECT r.*, a.name AS asset_name FROM risks r LEFT JOIN assets a "
+    "ON a.id = r.asset_id AND a.organization_id = r.organization_id "
+)
+
+
+def require_risk_asset(connection: sqlite3.Connection, asset_id: int | None, organization_id: int) -> None:
+    if asset_id is not None and connection.execute(
+        "SELECT id FROM assets WHERE id = ? AND organization_id = ?",
+        (asset_id, organization_id),
+    ).fetchone() is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
 
 
 class IncidentCreate(BaseModel):
@@ -445,6 +499,55 @@ def reset_user_password(
         )
         connection.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
     return {"status": "ok"}
+
+
+@app.post("/risks", response_model=Risk, status_code=201)
+def create_risk(risk: RiskCreate, user: dict = Depends(require_roles("administrador", "analista"))):
+    created_at = datetime.now(timezone.utc).isoformat()
+    with closing(connect()) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        require_risk_asset(connection, risk.asset_id, user["organization_id"])
+        cursor = connection.execute(
+            "INSERT INTO risks (organization_id, title, description, probability, impact, status, asset_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (user["organization_id"], risk.title, risk.description, risk.probability,
+             risk.impact, risk.status, risk.asset_id, created_at),
+        )
+        row = connection.execute(RISK_SELECT + "WHERE r.id = ? AND r.organization_id = ?",
+                                 (cursor.lastrowid, user["organization_id"])).fetchone()
+    return public_risk(row)
+
+
+@app.get("/risks", response_model=list[Risk])
+def list_risks(status: RiskStatus | None = None, level: RiskLevel | None = None,
+               asset_id: Annotated[int | None, Query(gt=0)] = None,
+               user: dict = Depends(require_user)):
+    conditions = ["r.organization_id = ?"]
+    parameters = [user["organization_id"]]
+    if status is not None:
+        conditions.append("r.status = ?")
+        parameters.append(status)
+    if level is not None:
+        conditions.append("r.probability * r.impact BETWEEN ? AND ?")
+        parameters.extend(RISK_LEVEL_RANGES[level])
+    if asset_id is not None:
+        conditions.append("r.asset_id = ?")
+        parameters.append(asset_id)
+    with closing(connect()) as connection:
+        require_risk_asset(connection, asset_id, user["organization_id"])
+        rows = connection.execute(RISK_SELECT + "WHERE " + " AND ".join(conditions) + " ORDER BY r.id",
+                                  parameters).fetchall()
+    return [public_risk(row) for row in rows]
+
+
+@app.get("/risks/{risk_id}", response_model=Risk)
+def get_risk(risk_id: int, user: dict = Depends(require_user)):
+    with closing(connect()) as connection:
+        row = connection.execute(RISK_SELECT + "WHERE r.id = ? AND r.organization_id = ?",
+                                 (risk_id, user["organization_id"])).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Risk not found")
+    return public_risk(row)
 
 
 @app.post("/assets", response_model=Asset, status_code=201)

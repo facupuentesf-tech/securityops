@@ -145,7 +145,7 @@ database, including authentication, permissions, migration of legacy data,
 incident and asset workflows, tenant isolation and persistence. An optional Node.js/Chrome smoke
 test exercises the authenticated interface at desktop and mobile widths.
 
-Asset editing and deletion, risks, controls, general audit logs, reports and dashboards remain
+Asset editing and deletion, risk extensions, controls, general audit logs, reports and dashboards remain
 future work. React, PostgreSQL and Docker are possible later choices.
 
 ## Incident-asset links (implemented)
@@ -169,3 +169,27 @@ a selector excluding linked assets, unlink buttons, loading/empty/error feedback
 and retry. Reader controls are hidden. Automated API tests cover relationships,
 validation, permissions, CSRF, tenant isolation, database constraints, migration
 preservation and restart persistence; Chrome smoke checks cover the interface.
+
+## Initial risk module
+
+`POST /risks` uses the existing administrator/analyst role dependency and session
+CSRF checks. A `BEGIN IMMEDIATE` transaction verifies the optional asset belongs
+to the session organization, inserts the risk and returns `201`. Composite foreign
+keys provide the same organization check against direct database writes.
+`GET /risks` and `GET /risks/{risk_id}` allow all authenticated roles; queries always
+bind the session organization. Missing/foreign risk or asset IDs return `404`.
+
+List filters `status`, `level`, `asset_id` combine with AND. Level filters use
+parameterized score ranges. Responses derive score and level from the stored
+probability/impact and include the optional asset name through an organization-scoped
+left join. The matrix is a prototype convention: low 1–4, medium 5–9, high 10–16,
+critical 17–25. Extra creation fields, including organization, score and level, are
+rejected. Migration 006 adds only the new table and indexes.
+
+The Spanish risk list, filters, create form and detail reuse the existing API,
+safe DOM rendering, feedback and responsive styles. Independent request versions
+discard stale list/detail/asset-selector responses on navigation or logout.
+Reader creation controls are hidden; the backend enforces permissions.
+API tests cover validation, all 25 factor combinations, tenant integrity and
+persistence. Chrome checks creation with/without assets, filtering, reader access,
+safe text, dates, network errors and desktop/mobile widths.

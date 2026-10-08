@@ -58,6 +58,8 @@ prototype with server-enforced tenant isolation. It provides:
 
 - Incident creation, listing, detail and optional status/severity filters.
 - Asset creation, listing and detail with optional type/criticality filters.
+- Initial risk creation, listing and detail with optional asset association,
+  strict probability/impact values, server-derived score/level and AND filters.
 - Status changes with persistent history recorded atomically with the update.
 - Investigation notes with validation and persistent storage.
 - User login/logout, scrypt password hashes, opaque server-side sessions in
@@ -87,7 +89,7 @@ The original project roadmap is preserved. Beyond the initial incident module,
 the following capabilities remain future work:
 
 1. Asset editing, deletion, ownership assignment
-2. Risk management
+2. Risk editing/deletion, control associations and residual evaluation
 3. Security controls
 4. Extended incident management with responsible users
 5. General audit logs
@@ -121,3 +123,14 @@ a selector excluding linked assets, unlink buttons, loading/empty/error feedback
 and retry. Reader controls are hidden. Automated API tests cover relationships,
 validation, permissions, CSRF, tenant isolation, database constraints, migration
 preservation and restart persistence; Chrome smoke checks cover the interface.
+
+## Initial risks
+
+Migration 006 implements organization-scoped risks with optional asset association.
+Administrators and analysts create; readers query. The Spanish interface supports
+list, creation, detail and filters by status, level and asset. The server enforces
+roles, CSRF, validation and same-organization associations; the database protects
+the association with a composite foreign key while preserving prior data.
+Score is probability × impact (integer factors 1–5). The prototype defines its own
+levels: low 1–4, medium 5–9, high 10–16, critical 17–25. Editing, deletion, controls
+and residual evaluation are deferred.

@@ -442,7 +442,7 @@ class IncidentTests(unittest.TestCase):
         with closing(sqlite3.connect(self.database)) as connection:
             self.assertEqual(
                 connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(),
-                [(1,), (2,), (3,), (4,), (5,)],
+                [(1,), (2,), (3,), (4,), (5,), (6,)],
             )
             self.assertEqual(
                 connection.execute("SELECT organization_id FROM incidents WHERE id = 17").fetchone()[0],
@@ -1110,6 +1110,8 @@ class IncidentTests(unittest.TestCase):
         self.request("POST", f'/incidents/{incident["id"]}/notes', {"content": "Preserved note"})
         self.stop_server()
         with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("DROP TABLE risks")
+            connection.execute("DELETE FROM schema_migrations WHERE version = 6")
             connection.execute("DROP TABLE incident_assets")
             connection.execute("DROP INDEX idx_incidents_id_organization")
             connection.execute("DELETE FROM schema_migrations WHERE version = 5")
@@ -1121,7 +1123,7 @@ class IncidentTests(unittest.TestCase):
         with closing(sqlite3.connect(self.database)) as connection:
             after = {table: connection.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() for table in tables}
             self.assertEqual(before, after)
-            self.assertEqual(connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(), [(1,), (2,), (3,), (4,), (5,)])
+            self.assertEqual(connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(), [(1,), (2,), (3,), (4,), (5,), (6,)])
         code, asset = self.request("POST", "/assets", self.asset_payload(description="Persistent asset"))
         self.assertEqual(code, 201)
         self.stop_server()
@@ -1228,6 +1230,8 @@ class IncidentTests(unittest.TestCase):
         self.stop_server()
         tables = ("organizations", "users", "sessions", "incidents", "assets", "incident_notes", "incident_status_history")
         with closing(app_main.connect()) as connection, connection:
+            connection.execute("DROP TABLE risks")
+            connection.execute("DELETE FROM schema_migrations WHERE version = 6")
             connection.execute("DROP TABLE incident_assets")
             connection.execute("DROP INDEX idx_incidents_id_organization")
             connection.execute("DROP INDEX idx_assets_id_organization")

@@ -67,6 +67,8 @@ The implemented role permissions are:
 | Create incidents, change status, add notes | Yes | Yes | No |
 | Read assets | Yes | Yes | Yes |
 | Create assets | Yes | Yes | No |
+| Read risks | Yes | Yes | Yes |
+| Create risks | Yes | Yes | No |
 | Link and unlink incident assets | Yes | Yes | No |
 | Manage users and reset passwords | Yes | No | No |
 
@@ -79,7 +81,7 @@ for shared deployment.
 ## Original Domain Vision: Future Work
 
 The following entities and relationships preserve the original vision.
-Asset extensions, risks, controls and general audit logs are not yet implemented.
+Asset extensions, risk extensions, controls and general audit logs remain future work.
 Responsible users for incidents remain future work.
 
 The planned domain entities are:
@@ -180,3 +182,18 @@ a selector excluding linked assets, unlink buttons, loading/empty/error feedback
 and retry. Reader controls are hidden. Automated API tests cover relationships,
 validation, permissions, CSRF, tenant isolation, database constraints, migration
 preservation and restart persistence; Chrome smoke checks cover the interface.
+
+## Initial risk model (implemented)
+
+A risk records a potential security event in one organization. It has an ID,
+trimmed nonempty title, optional description, integer probability and impact
+from 1 to 5, status identified/treating/accepted and UTC creation time.
+The initial status defaults to identified; the current module only creates
+and reads records, with no status updates or other editing/deletion.
+
+A risk may reference zero or one asset in the same organization; an asset may
+have multiple risks. Server validation and composite foreign keys both enforce
+this association. Score is probability × impact and level is derived using the
+prototype's own thresholds: low 1–4, medium 5–9, high 10–16, critical 17–25.
+Some integer scores within the intervals cannot be produced by the 5×5 factors.
+This is an initial assessment with no controls or residual-risk calculation.

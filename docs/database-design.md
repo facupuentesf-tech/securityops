@@ -6,7 +6,7 @@ The local version uses SQLite, by default at `backend/securityops.db`. The
 default path is relative to the backend module and can be overridden with
 `SECURITYOPS_DATABASE`. Numbered SQL migrations in `backend/migrations` are
 tracked in `schema_migrations`; database files are excluded from Git.
-Migrations 001–005 preserve existing incident, history, note, user and session
+Migrations 001–006 preserve existing incident, history, note, user and session
 data while assigning existing users and incidents to the initial organization.
 
 ## Implemented Schema
@@ -153,7 +153,7 @@ browser's timezone. Incident, history, note and asset data survive server restar
 
 ## Domain entities still planned
 
-Asset editing and deletion, risks, controls and general audit logs remain future work.
+Asset editing and deletion, risk extensions, controls and general audit logs remain future work.
 Multi-organization isolation is implemented for the current asset, incident and user
 operations. Incident links use the separate `incident_assets` table; `assigned_to` remains
 a planned extension. PostgreSQL remains a possible
@@ -172,7 +172,7 @@ The planned entities are:
 Editing, deletion, an `owner_id` association are planned.
 They are not present in the current schema or API.
 
-### Risks
+### Risks (implemented initial module; extensions planned)
 
 Represents potential security risks within an organization.
 
@@ -185,9 +185,9 @@ Main fields:
 - description
 - probability
 - impact
-- risk_level
+- score and level (derived response fields, not stored)
 - status
-- owner_id
+- owner_id (future extension, not implemented)
 - created_at
 
 ### Security Controls
@@ -255,3 +255,30 @@ a selector excluding linked assets, unlink buttons, loading/empty/error feedback
 and retry. Reader controls are hidden. Automated API tests cover relationships,
 validation, permissions, CSRF, tenant isolation, database constraints, migration
 preservation and restart persistence; Chrome smoke checks cover the interface.
+
+## risks (migration 006)
+
+| Column | Type | Constraints |
+| --- | --- | --- |
+| id | INTEGER | Autoincrement primary key |
+| organization_id | INTEGER | NOT NULL, references organizations(id) |
+| title | TEXT | NOT NULL, nonempty trimmed text; API trims before storage |
+| description | TEXT | Nullable |
+| probability | INTEGER | NOT NULL, integer storage and range 1–5 |
+| impact | INTEGER | NOT NULL, integer storage and range 1–5 |
+| status | TEXT | NOT NULL, identified/treating/accepted; default identified |
+| asset_id | INTEGER | Nullable; composite FK with organization_id to assets(id, organization_id) |
+| created_at | TEXT | NOT NULL, application-generated UTC ISO timestamp |
+
+Migration 006 adds the table and indexes on `(organization_id, id)`,
+`(organization_id, status, id)` and `(organization_id, asset_id, id)` without
+rewriting prior data. It reuses the unique asset key from migration 005. Foreign
+keys prevent cross-organization links, invalid assets, and changing the asset's
+organization or deleting an asset referenced by a risk. Null asset IDs are allowed.
+
+Score and level are derived on the server, not stored: `probability * impact`.
+The prototype's own matrix is low 1–4, medium 5–9, high 10–16, critical 17–25.
+These thresholds are a local convention rather than an external standard.
+SQLite checks storage type and range; JSON booleans and coercible strings/floats
+are rejected by strict API validation. No risk editing/deletion, control links,
+owner assignment or residual evaluation is implemented.

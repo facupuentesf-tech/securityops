@@ -18,6 +18,7 @@ compartido.
 ### Funciones implementadas
 
 - Crear, listar y consultar incidentes.
+- Crear, listar y consultar riesgos, con evaluación inicial y activo opcional.
 - Vincular varios activos por incidente y quitar vínculos sin borrar recursos.
 - Crear, listar y consultar activos, con filtros por tipo y criticidad combinados con AND.
 - Filtrar por estado y severidad, individualmente o combinados.
@@ -45,6 +46,8 @@ compartido.
 | Crear incidentes, cambiar estado y agregar notas | Sí | Sí | No |
 | Consultar activos | Sí | Sí | Sí |
 | Crear activos | Sí | Sí | No |
+| Consultar riesgos | Sí | Sí | Sí |
+| Crear riesgos | Sí | Sí | No |
 | Vincular y desvincular activos de incidentes | Sí | Sí | No |
 | Gestionar usuarios (crear, editar, desactivar y restablecer contraseña) | Sí | No | No |
 
@@ -58,7 +61,7 @@ su contraseña.
 Aún no están implementados:
 
 - Edición, eliminación y asignación de responsables de activos
-- Gestión de riesgos
+- Edición y eliminación de riesgos, evaluación residual y asociación con controles
 - Controles de seguridad
 - Ampliación de incidentes con responsables
 - Auditoría general más allá del historial de incidentes
@@ -402,7 +405,7 @@ locales y controles de creación ocultos para lectores.
 
 Prototipo funcional local con autenticación, permisos y aislamiento entre
 organizaciones, con creación y consulta de activos. Edición y eliminación de
-activos, riesgos, controles, auditoría general,
+activos, edición y eliminación de riesgos, controles, auditoría general,
 reportes y dashboard continúan pendientes.
 
 ## Activos afectados por incidente
@@ -437,3 +440,75 @@ Comprobación manual:
    de otra organización, comprobar que los IDs ajenos devuelven `404`.
 5. Revisar a ancho móvil, con nombres que contengan HTML y con conexión interrumpida;
    comprobar texto seguro, ausencia de desbordamiento y recuperación con Reintentar.
+
+## Riesgos: evaluación inicial
+
+La sección **Riesgos** permite crear, listar, filtrar y consultar riesgos de la
+organización autenticada. Administrador y analista pueden crear; lector solo
+consulta. Cada riesgo puede asociarse a un activo de la misma organización o
+registrarse sin activo. Edición, eliminación, controles y evaluación residual
+quedan para una etapa posterior.
+
+| Método | Ruta | Comportamiento |
+| --- | --- | --- |
+| POST | `/risks` | Crea y devuelve `201`; requiere sesión, permisos y CSRF |
+| GET | `/risks` | Lista por ID; filtros opcionales `status`, `level`, `asset_id` con AND |
+| GET | `/risks/{risk_id}` | Detalle; `404` para un riesgo inexistente o ajeno |
+
+```json
+{"title":"Pérdida de datos","description":"Falla de respaldo","probability":3,"impact":4,"status":"identified","asset_id":1}
+```
+
+Título obligatorio, recortado y no vacío. Descripción y `asset_id` son opcionales
+y aceptan null. Probabilidad e impacto son enteros estrictos entre 1 y 5: booleanos,
+decimales y cadenas se rechazan con `422`. Estados: `identified` (predeterminado),
+`treating`, `accepted`. `asset_id`, cuando se envía, debe ser un entero positivo.
+El servidor calcula `score` y `level`; el cliente no puede enviar esos campos ni
+`organization_id`. La respuesta incluye ID, fecha UTC, campos del riesgo, puntaje,
+nivel y `asset_name` (null si no tiene activo).
+
+**Matriz propia del prototipo:** puntaje = probabilidad × impacto. Estos umbrales
+son una convención de SecurityOps, no una clasificación atribuida a un estándar.
+
+| Puntaje | Nivel API | Interfaz |
+| --- | --- | --- |
+| 1–4 | low | Bajo |
+| 5–9 | medium | Medio |
+| 10–16 | high | Alto |
+| 17–25 | critical | Crítico |
+
+Con factores enteros de 1 a 5, algunos puntajes intermedios (por ejemplo, 17) no
+se obtienen por multiplicación; los intervalos definen igualmente el criterio.
+Puntaje y nivel se calculan al consultar y no se almacenan como datos independientes.
+Sin coincidencias, el listado devuelve `[]`. Si `asset_id` en una creación o filtro
+es inexistente o de otra organización, devuelve `404`; un activo propio sin riesgos
+devuelve `[]`. Filtros inválidos devuelven `422`. Lectores no pueden crear (`403`)
+y solicitudes anónimas reciben `401`.
+
+La migración **006** agrega `risks` e índices sin modificar registros existentes.
+La clave foránea compuesta `(asset_id, organization_id)` protege la pertenencia del
+activo; impide moverlo a otra organización o borrarlo mientras tenga riesgos.
+La organización siempre se deriva de la sesión. Se mantienen SQL parametrizado,
+CSRF y renderizado mediante `textContent`, con mensajes de carga, vacío y error.
+
+Comprobación manual:
+
+1. Iniciar la API e ingresar como administrador o analista. En **Riesgos**, crear
+   uno sin activo y otro asociado a un activo propio; verificar el título recortado,
+   fecha local, probabilidad, impacto, puntaje, nivel, estado y activo del detalle.
+2. Probar 1×4 (bajo), 1×5 (medio), 2×5 (alto), 4×4 (alto) y 4×5 (crítico).
+   En `/docs`, verificar que booleanos, valores 0/6 y campos `score`, `level` o
+   `organization_id` sean rechazados (usar cookie y `X-CSRF-Token` para POST).
+3. Aplicar filtros por estado, nivel y activo por separado y juntos; probar una
+   combinación vacía y **Limpiar**. Recargar y reiniciar: los riesgos deben persistir.
+4. Ingresar como lector: consultar listado y detalle, sin **Nuevo riesgo**.
+   Desde otra organización, los riesgos y activos anteriores no deben aparecer;
+   consultar sus IDs o usarlos en creación/filtros debe devolver `404`.
+5. Revisar en ancho móvil y con textos que contengan HTML. Interrumpir la conexión
+   y comprobar mensajes de error y reintentos en listado, detalle y selector.
+
+Las pruebas de riesgos cubren las 25 combinaciones, límites de los niveles,
+validaciones, filtros, roles, CSRF, aislamiento en ambas direcciones, integridad
+en SQL directo, conservación de todos los módulos al migrar y persistencia.
+La comprobación Chrome incluye creación con/sin activo, filtros, lector, fechas,
+textos seguros, errores de red y anchos 1280/390.

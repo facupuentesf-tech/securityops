@@ -6,6 +6,11 @@ const roles = {administrador: "Administrador", analista: "Analista", lector: "Le
 const assetTypes = {hardware: "Hardware", software: "Software", service: "Servicio", data: "Datos"};
 let assetListVersion = 0;
 let assetDetailVersion = 0;
+let riskListVersion = 0;
+let riskDetailVersion = 0;
+let riskAssetsVersion = 0;
+const riskStatuses = {identified: "Identificado", treating: "En tratamiento", accepted: "Aceptado"};
+const riskLevels = {low: "Bajo", medium: "Medio", high: "Alto", critical: "Crítico"};
 const dateFormat = new Intl.DateTimeFormat("es", {dateStyle: "medium", timeStyle: "short"});
 let selectedId = null;
 let listVersion = 0;
@@ -37,6 +42,17 @@ function showLogin() {
   ++detailVersion;
   ++assetListVersion;
   ++assetDetailVersion;
+  ++riskListVersion; ++riskDetailVersion; ++riskAssetsVersion;
+  $("risk-list").replaceChildren();
+  $("risk-create-form").reset();
+  $("risk-filter-form").reset();
+  $("risk-asset-select").replaceChildren(element("option", "Sin activo asociado"));
+  $("risk-asset-select").firstChild.value = "";
+  $("risk-filter-asset").replaceChildren(element("option", "Todos los activos"));
+  $("risk-filter-asset").firstChild.value = "";
+  $("risk-detail-content").hidden = true;
+  $("risk-detail-panel").hidden = true;
+  $("risk-list-panel").hidden = false;
   $("asset-list").replaceChildren();
   $("asset-detail-content").hidden = true;
   $("asset-create-form").reset();
@@ -65,6 +81,10 @@ function showApplication(session) {
   const canWrite = currentUser.role !== "lector";
   $("new-button").hidden = !canWrite;
   $("new-asset-button").hidden = !canWrite;
+  $("new-risk-button").hidden = !canWrite;
+  $("risk-create-panel").hidden = true;
+  loadRiskAssets();
+  loadRisks();
   $("asset-create-panel").hidden = true;
   loadAssets();
   $("create-panel").hidden = true;
@@ -485,7 +505,6 @@ async function start() {
     $("login-feedback").textContent = error.message;
   }
 }
-start();
 
 let affectedVersion = 0;
 async function loadAffectedAssets(id, version) {
@@ -558,3 +577,138 @@ $("affected-form").addEventListener("submit", async event => {
     if (id === selectedId && version === detailVersion && currentUser) await loadAffectedAssets(id, version);
   }
 });
+
+async function loadRiskAssets() {
+  const version = ++riskAssetsVersion;
+  const previousFilter = $("risk-filter-asset").value;
+  const previousAsset = $("risk-asset-select").value;
+  $("risk-asset-select").disabled = true;
+  $("risk-filter-asset").disabled = true;
+  $("risk-create-form").querySelector('button[type="submit"]').disabled = true;
+  $("risk-assets-feedback").textContent = "Cargando activos…";
+  $("risk-filter-assets-feedback").textContent = "Cargando selector de activos…";
+  $("risk-assets-retry").hidden = true;
+  try {
+    const assets = await api("/assets");
+    if (version !== riskAssetsVersion || !currentUser) return;
+    for (const [id, placeholder, previous] of [["risk-asset-select", "Sin activo asociado", previousAsset], ["risk-filter-asset", "Todos los activos", previousFilter]]) {
+      const select = $(id);
+      const empty = element("option", placeholder); empty.value = "";
+      select.replaceChildren(empty);
+      for (const asset of assets) {
+        const option = element("option", asset.name); option.value = asset.id;
+        select.append(option);
+      }
+      select.value = assets.some(asset => String(asset.id) === previous) ? previous : "";
+      select.disabled = false;
+    }
+    $("risk-assets-feedback").textContent = assets.length ? "" : "No hay activos; podés crear un riesgo sin asociación.";
+    $("risk-filter-assets-feedback").textContent = "";
+    $("risk-create-form").querySelector('button[type="submit"]').disabled = false;
+  } catch (error) {
+    if (version !== riskAssetsVersion || !currentUser) return;
+    $("risk-assets-feedback").textContent = error.message;
+    $("risk-filter-assets-feedback").textContent = error.message + " Usá Limpiar para reintentar la carga de activos.";
+    $("risk-assets-retry").hidden = false;
+  }
+}
+
+async function loadRisks() {
+  const version = ++riskListVersion;
+  $("risk-list").replaceChildren();
+  $("risk-count").textContent = "";
+  $("risk-list-feedback").textContent = "Cargando riesgos…";
+  const query = new URLSearchParams();
+  for (const [key, value] of new FormData($("risk-filter-form"))) if (value) query.set(key, value);
+  try {
+    const risks = await api(`/risks${query.size ? "?" + query : ""}`);
+    if (version !== riskListVersion || !currentUser) return;
+    $("risk-count").textContent = `${risks.length} ${risks.length === 1 ? "riesgo" : "riesgos"}`;
+    $("risk-list-feedback").textContent = risks.length ? "" : (query.size ? "No hay riesgos que coincidan con los filtros." : "Todavía no hay riesgos registrados.");
+    for (const risk of risks) {
+      const row = element("article", undefined, "incident risk");
+      const title = element("button", risk.title, "incident-title risk-title"); title.type = "button";
+      title.addEventListener("click", () => openRiskDetail(risk.id));
+      row.append(title, element("span", riskStatuses[risk.status], "badge"), element("span", riskLevels[risk.level], `badge severity-${risk.level}`), dateNode(risk.created_at));
+      row.append(element("p", `Probabilidad: ${risk.probability} · Impacto: ${risk.impact} · Puntaje: ${risk.score} · Activo: ${risk.asset_name === null ? "Sin activo asociado" : risk.asset_name + " (#" + risk.asset_id + ")"}`, "risk-summary user-text"));
+      $("risk-list").append(row);
+    }
+  } catch (error) {
+    if (version === riskListVersion && currentUser) $("risk-list-feedback").textContent = error.message + " Usá Aplicar filtros para reintentar.";
+  }
+}
+
+async function openRiskDetail(id) {
+  const version = ++riskDetailVersion;
+  $("risk-create-panel").hidden = true;
+  $("risk-list-panel").hidden = true;
+  $("risk-detail-panel").hidden = false;
+  $("risk-detail-content").hidden = true;
+  $("risk-detail-feedback").textContent = "Cargando riesgo…";
+  try {
+    const risk = await api(`/risks/${id}`);
+    if (version !== riskDetailVersion || !currentUser) return;
+    $("risk-detail-id").textContent = `RIESGO #${risk.id}`;
+    $("risk-detail-title").textContent = risk.title;
+    $("risk-detail-description").textContent = risk.description || "Sin descripción.";
+    $("risk-detail-matrix").textContent = `Probabilidad: ${risk.probability} · Impacto: ${risk.impact} · Puntaje: ${risk.score}`;
+    $("risk-detail-level").textContent = `Nivel ${riskLevels[risk.level].toLowerCase()}`;
+    $("risk-detail-level").className = `badge severity-${risk.level}`;
+    $("risk-detail-status").textContent = `Estado: ${riskStatuses[risk.status]}`;
+    $("risk-detail-asset").textContent = risk.asset_id === null ? "Sin activo asociado" : `Activo: ${risk.asset_name} (#${risk.asset_id})`;
+    $("risk-detail-date").replaceChildren("Creado el ", dateNode(risk.created_at));
+    $("risk-detail-feedback").textContent = "";
+    $("risk-detail-content").hidden = false;
+    $("risk-detail-title").focus();
+  } catch (error) {
+    if (version !== riskDetailVersion || !currentUser) return;
+    $("risk-detail-feedback").textContent = error.message;
+    const retry = element("button", "Reintentar", "text-button"); retry.type = "button";
+    retry.addEventListener("click", () => openRiskDetail(id));
+    $("risk-detail-feedback").append(" ", retry);
+  }
+}
+$("new-risk-button").addEventListener("click", () => {
+  ++riskDetailVersion;
+  $("risk-detail-panel").hidden = true;
+  $("risk-list-panel").hidden = false;
+  $("risk-create-panel").hidden = false;
+  loadRiskAssets();
+  $("risk-create-form").elements.title.focus();
+});
+$("cancel-risk-create").addEventListener("click", () => { ++riskDetailVersion; $("risk-create-panel").hidden = true; $("new-risk-button").focus(); });
+$("risk-assets-retry").addEventListener("click", loadRiskAssets);
+$("risk-filter-form").addEventListener("submit", event => { event.preventDefault(); loadRisks(); });
+$("clear-risk-filters").addEventListener("click", () => { $("risk-filter-form").reset(); loadRisks(); loadRiskAssets(); });
+$("risk-back-button").addEventListener("click", () => {
+  ++riskDetailVersion;
+  $("risk-detail-panel").hidden = true;
+  $("risk-list-panel").hidden = false;
+  loadRisks();
+  $("risk-list-heading").scrollIntoView({block: "nearest"});
+});
+$("risk-create-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  if ($("risk-asset-select").disabled) { message("Esperá la carga de activos o usá Reintentar.", true); return; }
+  const form = event.currentTarget;
+  const body = Object.fromEntries(new FormData(form));
+  body.title = body.title.trim();
+  if (!body.title) { message("Completá el título del riesgo con texto.", true); return; }
+  body.description = body.description || null;
+  body.probability = Number(body.probability); body.impact = Number(body.impact);
+  if (![body.probability, body.impact].every(value => Number.isInteger(value) && value >= 1 && value <= 5)) {
+    message("Probabilidad e impacto deben ser enteros de 1 a 5.", true); return;
+  }
+  body.asset_id = body.asset_id ? Number(body.asset_id) : null;
+  const version = riskDetailVersion;
+  busy(form, true, "Creando…"); message("");
+  try {
+    const risk = await api("/risks", "POST", body);
+    if (version !== riskDetailVersion || !currentUser) return;
+    form.reset();
+    message("Riesgo creado correctamente.");
+    await openRiskDetail(risk.id);
+  } catch (error) { if (version === riskDetailVersion && currentUser) message(error.message, true); }
+  finally { busy(form, false); }
+});
+start();

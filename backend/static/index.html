@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SecurityOps · Incidentes y activos</title>
+  <title>SecurityOps · Incidentes, activos y riesgos</title>
   <link rel="stylesheet" href="/static/styles.css">
   <script src="/static/app.js" defer></script>
 </head>
@@ -80,6 +80,35 @@
           <p id="asset-detail-date" class="muted"></p><p id="asset-detail-type"></p><span id="asset-detail-criticality" class="badge"></span>
           <h3>Descripción</h3><p id="asset-detail-description" class="user-text"></p>
         </div>
+      </section>
+    </section>
+    <section id="risks-view" aria-labelledby="risks-heading">
+      <div class="page-heading"><div><p class="eyebrow">EVALUACIÓN INICIAL</p><h1 id="risks-heading">Riesgos</h1><p class="muted">Registrá posibles eventos y su evaluación inicial.</p></div><button id="new-risk-button" type="button">+ Nuevo riesgo</button></div>
+      <section id="risk-create-panel" class="panel" hidden>
+        <div class="section-heading"><h2>Registrar riesgo</h2><button id="cancel-risk-create" type="button" class="secondary">Cancelar</button></div>
+        <form id="risk-create-form">
+          <label>Título<input name="title" required></label>
+          <label>Descripción opcional<textarea name="description" rows="4"></textarea></label>
+          <div class="form-row"><label>Probabilidad (1–5)<input name="probability" type="number" min="1" max="5" step="1" value="1" required></label><label>Impacto (1–5)<input name="impact" type="number" min="1" max="5" step="1" value="1" required></label></div>
+          <div class="form-row"><label>Estado<select name="status"><option value="identified">Identificado</option><option value="treating">En tratamiento</option><option value="accepted">Aceptado</option></select></label><label>Activo opcional<select id="risk-asset-select" name="asset_id"><option value="">Sin activo asociado</option></select></label></div>
+          <p id="risk-assets-feedback" class="muted" role="status"></p><button id="risk-assets-retry" type="button" class="secondary" hidden>Reintentar carga de activos</button>
+          <small class="muted">Criterio propio del prototipo: puntaje = probabilidad × impacto. Bajo: 1–4; medio: 5–9; alto: 10–16; crítico: 17–25.</small>
+          <button type="submit">Crear riesgo</button>
+        </form>
+      </section>
+      <section id="risk-list-panel" class="panel">
+        <div class="section-heading"><h2 id="risk-list-heading">Registro de riesgos</h2><span id="risk-count" class="muted"></span></div>
+        <form id="risk-filter-form" class="filters">
+          <label>Estado<select name="status"><option value="">Todos los estados</option><option value="identified">Identificado</option><option value="treating">En tratamiento</option><option value="accepted">Aceptado</option></select></label>
+          <label>Nivel<select name="level"><option value="">Todos los niveles</option><option value="low">Bajo</option><option value="medium">Medio</option><option value="high">Alto</option><option value="critical">Crítico</option></select></label>
+          <label>Activo<select id="risk-filter-asset" name="asset_id"><option value="">Todos los activos</option></select></label>
+          <button type="submit" class="secondary">Aplicar filtros</button><button id="clear-risk-filters" type="button" class="text-button">Limpiar</button>
+        </form>
+        <p id="risk-filter-assets-feedback" class="muted" role="status"></p><p id="risk-list-feedback" class="empty" role="status"></p><div id="risk-list" class="incident-list"></div>
+      </section>
+      <section id="risk-detail-panel" class="panel" hidden>
+        <button id="risk-back-button" type="button" class="text-button">← Volver a riesgos</button><p id="risk-detail-feedback" class="empty" role="status"></p>
+        <div id="risk-detail-content" hidden><p id="risk-detail-id" class="eyebrow"></p><h1 id="risk-detail-title" tabindex="-1"></h1><p id="risk-detail-description" class="user-text"></p><p id="risk-detail-matrix" class="user-text"></p><span id="risk-detail-level" class="badge"></span><p id="risk-detail-status"></p><p id="risk-detail-asset" class="user-text"></p><p id="risk-detail-date" class="muted"></p></div>
       </section>
     </section>
     <section id="users-view" class="panel" aria-labelledby="users-heading" hidden>

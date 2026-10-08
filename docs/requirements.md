@@ -112,7 +112,7 @@ and backend-enforced role-based permissions.
 
 ## Original Requirements: Future Work
 
-Asset extensions, risks, controls, general audit logs and shared deployment remain
+Asset extensions, risk extensions, controls, general audit logs and shared deployment remain
 future work. Multi-organization data isolation is implemented, but this remains
 a local prototype bound to `127.0.0.1` and is not intended for shared deployment.
 
@@ -129,7 +129,7 @@ Examples:
 - Cloud resources
 - Applications
 
-### 2. Risks
+### 2. Risk extensions
 
 The system must allow organizations to identify and manage security risks.
 
@@ -184,3 +184,29 @@ a selector excluding linked assets, unlink buttons, loading/empty/error feedback
 and retry. Reader controls are hidden. Automated API tests cover relationships,
 validation, permissions, CSRF, tenant isolation, database constraints, migration
 preservation and restart persistence; Chrome smoke checks cover the interface.
+
+## Initial risks (implemented)
+
+- `POST /risks` returns `201`; administrators and analysts create, readers only
+  query. Anonymous requests return `401`; unauthorized writes or invalid CSRF
+  tokens return `403`.
+- Title is required, trimmed and cannot be whitespace-only. Description is optional
+  and nullable. Probability and impact are strict JSON integers from 1 to 5:
+  booleans, strings, floats and out-of-range values return `422`.
+- Status is identified/treating/accepted, default identified. Asset ID is optional,
+  nullable and otherwise a strict positive integer belonging to the session organization.
+- Organization is session-derived. Extra fields including organization_id, score
+  and level return `422`. The server computes score = probability × impact.
+- The prototype's own matrix is low 1–4, medium 5–9, high 10–16, critical 17–25;
+  it is not presented as an external standard. Response fields include score,
+  level, UTC created_at and nullable asset_name.
+- `GET /risks` returns records ordered by ID, with status/level/asset_id filters
+  combined with AND; no matches returns `[]`. Invalid filters return `422`.
+- `GET /risks/{risk_id}` returns a risk. Missing or foreign risks/assets return
+  `404`, including asset IDs supplied in creation or filters.
+- Migration 006 preserves existing data. Database foreign keys enforce same-tenant
+  asset associations and restrict removal or tenant changes of referenced assets.
+- The responsive Spanish section provides list, filters, creation and detail,
+  optional organization asset selection, safe text rendering and loading/empty/error
+  feedback. Data persists across server restarts.
+- Editing, deletion, controls, owner assignment and residual evaluation remain future work.
