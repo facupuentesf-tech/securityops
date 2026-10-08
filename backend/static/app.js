@@ -11,6 +11,12 @@ let riskDetailVersion = 0;
 let riskAssetsVersion = 0;
 const riskStatuses = {identified: "Identificado", treating: "En tratamiento", accepted: "Aceptado"};
 const riskLevels = {low: "Bajo", medium: "Medio", high: "Alto", critical: "Crítico"};
+const controlTypes = {preventive: "Preventivo", detective: "Detectivo", corrective: "Correctivo"};
+const controlStatuses = {planned: "Planificado", implemented: "Implementado", retired: "Retirado"};
+let controlListVersion = 0;
+let controlDetailVersion = 0;
+let riskControlsVersion = 0;
+let selectedRiskId = null;
 const dateFormat = new Intl.DateTimeFormat("es", {dateStyle: "medium", timeStyle: "short"});
 let selectedId = null;
 let listVersion = 0;
@@ -43,6 +49,17 @@ function showLogin() {
   ++assetListVersion;
   ++assetDetailVersion;
   ++riskListVersion; ++riskDetailVersion; ++riskAssetsVersion;
+  ++controlListVersion; ++controlDetailVersion; ++riskControlsVersion;
+  selectedRiskId = null;
+  $("control-list").replaceChildren();
+  $("control-create-form").reset();
+  $("control-filter-form").reset();
+  $("control-list-panel").hidden = false;
+  $("control-detail-panel").hidden = true;
+  $("control-detail-content").hidden = true;
+  $("associated-list").replaceChildren();
+  $("associated-select").replaceChildren();
+  $("associated-form").hidden = true;
   $("risk-list").replaceChildren();
   $("risk-create-form").reset();
   $("risk-filter-form").reset();
@@ -82,6 +99,9 @@ function showApplication(session) {
   $("new-button").hidden = !canWrite;
   $("new-asset-button").hidden = !canWrite;
   $("new-risk-button").hidden = !canWrite;
+  $("new-control-button").hidden = !canWrite;
+  $("control-create-panel").hidden = true;
+  loadControls();
   $("risk-create-panel").hidden = true;
   loadRiskAssets();
   loadRisks();
@@ -639,7 +659,13 @@ async function loadRisks() {
 }
 
 async function openRiskDetail(id) {
+  selectedRiskId = id;
   const version = ++riskDetailVersion;
+  $("associated-list").replaceChildren();
+  $("associated-select").replaceChildren();
+  $("associated-form").hidden = true;
+  $("associated-retry").hidden = true;
+  $("associated-feedback").textContent = "Cargando controles asociados…";
   $("risk-create-panel").hidden = true;
   $("risk-list-panel").hidden = true;
   $("risk-detail-panel").hidden = false;
@@ -660,6 +686,7 @@ async function openRiskDetail(id) {
     $("risk-detail-feedback").textContent = "";
     $("risk-detail-content").hidden = false;
     $("risk-detail-title").focus();
+    await loadRiskControls(id, version);
   } catch (error) {
     if (version !== riskDetailVersion || !currentUser) return;
     $("risk-detail-feedback").textContent = error.message;
@@ -710,5 +737,158 @@ $("risk-create-form").addEventListener("submit", async event => {
     await openRiskDetail(risk.id);
   } catch (error) { if (version === riskDetailVersion && currentUser) message(error.message, true); }
   finally { busy(form, false); }
+});
+async function loadControls() {
+  const version = ++controlListVersion;
+  $("control-list").replaceChildren();
+  $("control-count").textContent = "";
+  $("control-list-feedback").textContent = "Cargando controles…";
+  const query = new URLSearchParams();
+  for (const [key, value] of new FormData($("control-filter-form"))) if (value) query.set(key, value);
+  try {
+    const controls = await api(`/controls${query.size ? "?" + query : ""}`);
+    if (version !== controlListVersion || !currentUser) return;
+    $("control-count").textContent = `${controls.length} ${controls.length === 1 ? "control" : "controles"}`;
+    $("control-list-feedback").textContent = controls.length ? "" : (query.size ? "No hay controles que coincidan con los filtros." : "Todavía no hay controles registrados.");
+    for (const control of controls) {
+      const row = element("article", undefined, "incident control");
+      const name = element("button", control.name, "incident-title control-name"); name.type = "button";
+      name.addEventListener("click", () => openControlDetail(control.id));
+      row.append(name, element("span", controlTypes[control.type], "badge"), element("span", controlStatuses[control.status], "badge"), dateNode(control.created_at));
+      $("control-list").append(row);
+    }
+  } catch (error) {
+    if (version === controlListVersion && currentUser) $("control-list-feedback").textContent = error.message + " Usá Aplicar filtros para reintentar.";
+  }
+}
+async function openControlDetail(id) {
+  const version = ++controlDetailVersion;
+  $("control-create-panel").hidden = true;
+  $("control-list-panel").hidden = true;
+  $("control-detail-panel").hidden = false;
+  $("control-detail-content").hidden = true;
+  $("control-detail-feedback").textContent = "Cargando control…";
+  try {
+    const control = await api(`/controls/${id}`);
+    if (version !== controlDetailVersion || !currentUser) return;
+    $("control-detail-id").textContent = `CONTROL #${control.id}`;
+    $("control-detail-name").textContent = control.name;
+    $("control-detail-description").textContent = control.description || "Sin descripción.";
+    $("control-detail-type").textContent = `Tipo: ${controlTypes[control.type]}`;
+    $("control-detail-status").textContent = `Estado: ${controlStatuses[control.status]}`;
+    $("control-detail-date").replaceChildren("Creado el ", dateNode(control.created_at));
+    $("control-detail-feedback").textContent = "";
+    $("control-detail-content").hidden = false;
+    $("control-detail-name").focus();
+  } catch (error) {
+    if (version !== controlDetailVersion || !currentUser) return;
+    $("control-detail-feedback").textContent = error.message;
+    const retry = element("button", "Reintentar", "text-button"); retry.type = "button";
+    retry.addEventListener("click", () => openControlDetail(id));
+    $("control-detail-feedback").append(" ", retry);
+  }
+}
+$("new-control-button").addEventListener("click", () => {
+  ++controlDetailVersion;
+  $("control-detail-panel").hidden = true;
+  $("control-list-panel").hidden = false;
+  $("control-create-panel").hidden = false;
+  $("control-create-form").elements.name.focus();
+});
+$("cancel-control-create").addEventListener("click", () => { ++controlDetailVersion; $("control-create-panel").hidden = true; $("new-control-button").focus(); });
+$("control-filter-form").addEventListener("submit", event => { event.preventDefault(); loadControls(); });
+$("clear-control-filters").addEventListener("click", () => { $("control-filter-form").reset(); loadControls(); });
+$("control-back-button").addEventListener("click", () => {
+  ++controlDetailVersion;
+  $("control-detail-panel").hidden = true;
+  $("control-list-panel").hidden = false;
+  loadControls(); $("control-list-heading").scrollIntoView({block: "nearest"});
+});
+$("control-create-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const form = event.currentTarget, version = controlDetailVersion;
+  const body = Object.fromEntries(new FormData(form));
+  body.name = body.name.trim();
+  if (!body.name) { message("Completá el nombre del control con texto.", true); return; }
+  body.description = body.description || null;
+  busy(form, true, "Creando…"); message("");
+  try {
+    const control = await api("/controls", "POST", body);
+    if (version !== controlDetailVersion || !currentUser) return;
+    form.reset(); message("Control creado correctamente.");
+    await openControlDetail(control.id);
+    if (selectedRiskId !== null && !$("risk-detail-panel").hidden) await loadRiskControls(selectedRiskId, riskDetailVersion);
+  } catch (error) { if (version === controlDetailVersion && currentUser) message(error.message, true); }
+  finally { busy(form, false); }
+});
+
+async function loadRiskControls(id, version) {
+  const requestVersion = ++riskControlsVersion;
+  const active = () => id === selectedRiskId && version === riskDetailVersion && requestVersion === riskControlsVersion && currentUser;
+  $("associated-list").replaceChildren();
+  $("associated-select").replaceChildren();
+  $("associated-form").hidden = true;
+  $("associated-retry").hidden = true;
+  $("associated-retry").disabled = false;
+  $("associated-feedback").textContent = "Cargando controles asociados…";
+  try {
+    const canWrite = currentUser.role !== "lector";
+    const [linked, controls] = await Promise.all([api(`/risks/${id}/controls`), canWrite ? api("/controls") : Promise.resolve([])]);
+    if (!active()) return;
+    $("associated-feedback").textContent = linked.length ? "" : "Todavía no hay controles asociados.";
+    for (const control of linked) {
+      const row = element("li");
+      row.append(element("span", `${control.name} · ${controlTypes[control.type]} · ${controlStatuses[control.status]}`, "user-text"));
+      if (canWrite) {
+        const remove = element("button", "Quitar vínculo", "secondary"); remove.type = "button";
+        remove.setAttribute("aria-label", `Quitar vínculo con ${control.name}`);
+        remove.addEventListener("click", () => mutateRiskControl(id, version, "DELETE", control.id));
+        row.append(remove);
+      }
+      $("associated-list").append(row);
+    }
+    if (canWrite) {
+      const ids = new Set(linked.map(control => control.id));
+      const available = controls.filter(control => !ids.has(control.id));
+      for (const control of available) {
+        const option = element("option", `${control.name} · ${controlStatuses[control.status]}`); option.value = control.id;
+        $("associated-select").append(option);
+      }
+      if (!available.length) {
+        const empty = element("option", "No hay controles disponibles para vincular."); empty.value = "";
+        $("associated-select").append(empty);
+      }
+      $("associated-select").selectedIndex = 0;
+      $("associated-select").disabled = !available.length;
+      $("associated-form").querySelector("button").disabled = !available.length;
+      $("associated-form").hidden = false;
+    }
+  } catch (error) {
+    if (!active()) return;
+    $("associated-feedback").textContent = error.message;
+    $("associated-retry").hidden = false;
+  }
+}
+async function mutateRiskControl(id, version, method, controlId) {
+  const active = () => id === selectedRiskId && version === riskDetailVersion && currentUser;
+  for (const node of $("associated-controls").querySelectorAll("button, select")) node.disabled = true;
+  $("associated-feedback").textContent = method === "POST" ? "Vinculando control…" : "Quitando vínculo…";
+  try {
+    await api(`/risks/${id}/controls${method === "DELETE" ? "/" + controlId : ""}`, method, method === "POST" ? {control_id: controlId} : undefined);
+    if (active()) message(method === "POST" ? "Control vinculado." : "Vínculo eliminado. El riesgo y el control se conservan.");
+  } catch (error) { if (active()) message(error.message, true); }
+  finally {
+    if (active()) {
+      $("associated-retry").disabled = false;
+      await loadRiskControls(id, version);
+    }
+  }
+}
+$("associated-retry").addEventListener("click", () => loadRiskControls(selectedRiskId, riskDetailVersion));
+$("associated-form").addEventListener("submit", event => {
+  event.preventDefault();
+  const controlId = Number($("associated-select").value);
+  if (!Number.isSafeInteger(controlId) || controlId <= 0 || $("associated-select").disabled) return;
+  mutateRiskControl(selectedRiskId, riskDetailVersion, "POST", controlId);
 });
 start();

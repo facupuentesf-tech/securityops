@@ -6,7 +6,7 @@ The local version uses SQLite, by default at `backend/securityops.db`. The
 default path is relative to the backend module and can be overridden with
 `SECURITYOPS_DATABASE`. Numbered SQL migrations in `backend/migrations` are
 tracked in `schema_migrations`; database files are excluded from Git.
-Migrations 001–006 preserve existing incident, history, note, user and session
+Migrations 001–007 preserve existing incident, history, note, user and session
 data while assigning existing users and incidents to the initial organization.
 
 ## Implemented Schema
@@ -153,7 +153,7 @@ browser's timezone. Incident, history, note and asset data survive server restar
 
 ## Domain entities still planned
 
-Asset editing and deletion, risk extensions, controls and general audit logs remain future work.
+Asset editing and deletion, risk/control extensions and general audit logs remain future work.
 Multi-organization isolation is implemented for the current asset, incident and user
 operations. Incident links use the separate `incident_assets` table; `assigned_to` remains
 a planned extension. PostgreSQL remains a possible
@@ -280,5 +280,34 @@ Score and level are derived on the server, not stored: `probability * impact`.
 The prototype's own matrix is low 1–4, medium 5–9, high 10–16, critical 17–25.
 These thresholds are a local convention rather than an external standard.
 SQLite checks storage type and range; JSON booleans and coercible strings/floats
-are rejected by strict API validation. No risk editing/deletion, control links,
+are rejected by strict API validation. No risk editing/deletion,
 owner assignment or residual evaluation is implemented.
+
+## Security controls and risk associations (migration 007)
+
+`security_controls` stores:
+
+| Column | Type | Constraints |
+| --- | --- | --- |
+| id | INTEGER | Autoincrement primary key |
+| organization_id | INTEGER | NOT NULL, FK to organizations(id) |
+| name | TEXT | NOT NULL, nonempty trimmed text; API trims before storage |
+| description | TEXT | Nullable |
+| type | TEXT | NOT NULL: preventive/detective/corrective |
+| status | TEXT | NOT NULL: planned/implemented/retired; default planned |
+| created_at | TEXT | NOT NULL, application-generated UTC ISO timestamp |
+
+Unique `(id, organization_id)` indexes on controls and risks support the composite
+foreign keys of `risk_controls(risk_id, control_id, organization_id)`. All three
+columns are NOT NULL; `(risk_id, control_id)` is the primary key. Organization also
+references `organizations(id)`. Both resources must belong to this organization.
+Foreign keys protect inserts, relation updates, parent organization changes and
+parent removal. Unlinking deletes only a relation. A reverse index on
+`(control_id, organization_id)` supports control references.
+
+Controls have organization/ID, organization/type/ID and organization/status/ID
+indexes. Migration 007 adds tables/indexes without rebuilding or rewriting prior
+records. Preservation tests include users, sessions, incidents, history, notes,
+assets, incident-asset links, risks and existing autoincrement sequences.
+Links store no residual assessment or effectiveness claim and never update risk
+probability, impact, score or level. Control editing/deletion remains future work.

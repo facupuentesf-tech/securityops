@@ -145,7 +145,7 @@ database, including authentication, permissions, migration of legacy data,
 incident and asset workflows, tenant isolation and persistence. An optional Node.js/Chrome smoke
 test exercises the authenticated interface at desktop and mobile widths.
 
-Asset editing and deletion, risk extensions, controls, general audit logs, reports and dashboards remain
+Asset editing and deletion, risk/control extensions, general audit logs, reports and dashboards remain
 future work. React, PostgreSQL and Docker are possible later choices.
 
 ## Incident-asset links (implemented)
@@ -193,3 +193,33 @@ Reader creation controls are hidden; the backend enforces permissions.
 API tests cover validation, all 25 factor combinations, tenant integrity and
 persistence. Chrome checks creation with/without assets, filtering, reader access,
 safe text, dates, network errors and desktop/mobile widths.
+
+## Security controls and risk links
+
+`POST /controls` returns `201` using the existing administrator/analyst dependency
+and session CSRF protection. `GET /controls` (type/status AND filters) and
+`GET /controls/{control_id}` allow all authenticated roles and bind organization
+from the session. Response models omit internal organization IDs; creation models
+reject extra fields. Names are trimmed, descriptions nullable, and type/status
+values are fixed enums.
+
+`GET /risks/{risk_id}/controls` validates the risk's organization and lists full
+control records ordered by ID. `POST` accepts a strict positive `control_id`,
+validates both resources and creates a relation with `201`; duplicate pairs return
+`409`. `DELETE /risks/{risk_id}/controls/{control_id}` removes only that relation
+with an empty `204`, or returns `404` when absent. Missing/foreign resources return
+`404`; anonymous requests return `401`, readers' writes or invalid CSRF return
+`403`, invalid input returns `422`.
+
+Relation writes use `BEGIN IMMEDIATE`, serializing existence checks and writes
+so concurrent duplicate requests yield one creation and one conflict. All input
+values use bound SQL parameters. Migration 007 uses composite foreign keys to
+enforce same-organization links even outside the API and keeps all prior data.
+
+The Spanish control list/create/detail and risk association UI reuse safe DOM
+rendering, responsive styles and request versions to ignore stale responses.
+Only unlinked controls in the organization are selectable; readers see the list
+without mutation controls. Linking documents a measure and does not calculate
+residual risk, change the initial score or prove effectiveness. Automated tests
+cover API, concurrency, persistence, migration preservation and database integrity;
+Chrome exercises the UI, role visibility, safe text, feedback and mobile widths.

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SecurityOps · Incidentes, activos y riesgos</title>
+  <title>SecurityOps · Incidentes, activos, riesgos y controles</title>
   <link rel="stylesheet" href="/static/styles.css">
   <script src="/static/app.js" defer></script>
 </head>
@@ -108,8 +108,21 @@
       </section>
       <section id="risk-detail-panel" class="panel" hidden>
         <button id="risk-back-button" type="button" class="text-button">← Volver a riesgos</button><p id="risk-detail-feedback" class="empty" role="status"></p>
-        <div id="risk-detail-content" hidden><p id="risk-detail-id" class="eyebrow"></p><h1 id="risk-detail-title" tabindex="-1"></h1><p id="risk-detail-description" class="user-text"></p><p id="risk-detail-matrix" class="user-text"></p><span id="risk-detail-level" class="badge"></span><p id="risk-detail-status"></p><p id="risk-detail-asset" class="user-text"></p><p id="risk-detail-date" class="muted"></p></div>
+        <div id="risk-detail-content" hidden><p id="risk-detail-id" class="eyebrow"></p><h1 id="risk-detail-title" tabindex="-1"></h1><p id="risk-detail-description" class="user-text"></p><p id="risk-detail-matrix" class="user-text"></p><span id="risk-detail-level" class="badge"></span><p id="risk-detail-status"></p><p id="risk-detail-asset" class="user-text"></p><p id="risk-detail-date" class="muted"></p>
+          <section id="associated-controls" aria-labelledby="associated-heading"><h2 id="associated-heading">Controles asociados</h2><p class="muted">La asociación documenta una medida: no cambia el puntaje del riesgo ni demuestra que el control sea eficaz.</p><p id="associated-feedback" class="muted" role="status"></p><ul id="associated-list" class="notes"></ul><form id="associated-form" hidden><label>Control<select id="associated-select" name="control_id" required></select></label><button type="submit">Vincular control</button></form><button id="associated-retry" type="button" class="secondary" hidden>Reintentar</button></section>
+        </div>
       </section>
+    </section>
+    <section id="controls-view" aria-labelledby="controls-heading">
+      <div class="page-heading"><div><p class="eyebrow">MEDIDAS DE SEGURIDAD</p><h1 id="controls-heading">Controles</h1><p class="muted">Documentá las medidas de seguridad de tu organización.</p></div><button id="new-control-button" type="button">+ Nuevo control</button></div>
+      <section id="control-create-panel" class="panel" hidden>
+        <div class="section-heading"><h2>Registrar control</h2><button id="cancel-control-create" type="button" class="secondary">Cancelar</button></div>
+        <form id="control-create-form"><label>Nombre<input name="name" required></label><label>Descripción opcional<textarea name="description" rows="4"></textarea></label><div class="form-row"><label>Tipo<select name="type"><option value="preventive">Preventivo</option><option value="detective">Detectivo</option><option value="corrective">Correctivo</option></select></label><label>Estado<select name="status"><option value="planned">Planificado</option><option value="implemented">Implementado</option><option value="retired">Retirado</option></select></label></div><button type="submit">Crear control</button></form>
+      </section>
+      <section id="control-list-panel" class="panel"><div class="section-heading"><h2 id="control-list-heading">Registro de controles</h2><span id="control-count" class="muted"></span></div>
+        <form id="control-filter-form" class="filters"><label>Tipo<select name="type"><option value="">Todos los tipos</option><option value="preventive">Preventivo</option><option value="detective">Detectivo</option><option value="corrective">Correctivo</option></select></label><label>Estado<select name="status"><option value="">Todos los estados</option><option value="planned">Planificado</option><option value="implemented">Implementado</option><option value="retired">Retirado</option></select></label><button type="submit" class="secondary">Aplicar filtros</button><button id="clear-control-filters" type="button" class="text-button">Limpiar</button></form><p id="control-list-feedback" class="empty" role="status"></p><div id="control-list" class="incident-list"></div>
+      </section>
+      <section id="control-detail-panel" class="panel" hidden><button id="control-back-button" type="button" class="text-button">← Volver a controles</button><p id="control-detail-feedback" class="empty" role="status"></p><div id="control-detail-content" hidden><p id="control-detail-id" class="eyebrow"></p><h1 id="control-detail-name" tabindex="-1"></h1><p id="control-detail-description" class="user-text"></p><span id="control-detail-type" class="badge"></span><p id="control-detail-status"></p><p id="control-detail-date" class="muted"></p></div></section>
     </section>
     <section id="users-view" class="panel" aria-labelledby="users-heading" hidden>
       <div class="section-heading"><div><h2 id="users-heading">Usuarios</h2><p class="muted">Creá cuentas y asigná un rol. Desactivar una cuenta revoca su acceso.</p></div><button id="reload-users" class="secondary" type="button">Actualizar</button></div>

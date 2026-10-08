@@ -19,6 +19,7 @@ compartido.
 
 - Crear, listar y consultar incidentes.
 - Crear, listar y consultar riesgos, con evaluación inicial y activo opcional.
+- Crear, listar y consultar controles de seguridad y vincularlos con riesgos.
 - Vincular varios activos por incidente y quitar vínculos sin borrar recursos.
 - Crear, listar y consultar activos, con filtros por tipo y criticidad combinados con AND.
 - Filtrar por estado y severidad, individualmente o combinados.
@@ -48,6 +49,8 @@ compartido.
 | Crear activos | Sí | Sí | No |
 | Consultar riesgos | Sí | Sí | Sí |
 | Crear riesgos | Sí | Sí | No |
+| Consultar controles y vínculos con riesgos | Sí | Sí | Sí |
+| Crear controles, vincular y desvincular | Sí | Sí | No |
 | Vincular y desvincular activos de incidentes | Sí | Sí | No |
 | Gestionar usuarios (crear, editar, desactivar y restablecer contraseña) | Sí | No | No |
 
@@ -61,8 +64,8 @@ su contraseña.
 Aún no están implementados:
 
 - Edición, eliminación y asignación de responsables de activos
-- Edición y eliminación de riesgos, evaluación residual y asociación con controles
-- Controles de seguridad
+- Edición y eliminación de riesgos y evaluación residual
+- Edición y eliminación de controles de seguridad, evaluación de eficacia
 - Ampliación de incidentes con responsables
 - Auditoría general más allá del historial de incidentes
 - Reportes
@@ -405,7 +408,7 @@ locales y controles de creación ocultos para lectores.
 
 Prototipo funcional local con autenticación, permisos y aislamiento entre
 organizaciones, con creación y consulta de activos. Edición y eliminación de
-activos, edición y eliminación de riesgos, controles, auditoría general,
+activos, edición y eliminación de riesgos y controles, auditoría general,
 reportes y dashboard continúan pendientes.
 
 ## Activos afectados por incidente
@@ -446,7 +449,7 @@ Comprobación manual:
 La sección **Riesgos** permite crear, listar, filtrar y consultar riesgos de la
 organización autenticada. Administrador y analista pueden crear; lector solo
 consulta. Cada riesgo puede asociarse a un activo de la misma organización o
-registrarse sin activo. Edición, eliminación, controles y evaluación residual
+registrarse sin activo. Edición, eliminación y evaluación residual
 quedan para una etapa posterior.
 
 | Método | Ruta | Comportamiento |
@@ -512,3 +515,69 @@ validaciones, filtros, roles, CSRF, aislamiento en ambas direcciones, integridad
 en SQL directo, conservación de todos los módulos al migrar y persistencia.
 La comprobación Chrome incluye creación con/sin activo, filtros, lector, fechas,
 textos seguros, errores de red y anchos 1280/390.
+
+## Controles de seguridad y vínculos con riesgos
+
+La sección **Controles** ofrece listado, filtros, creación y detalle. Nombre
+obligatorio, recortado y no vacío; descripción opcional (omitida o null se guarda
+como null). Tipos: `preventive`, `detective`, `corrective`. Estados: `planned`
+(predeterminado), `implemented`, `retired`. El servidor asigna ID, organización y
+fecha UTC. Campos extra, incluido `organization_id`, y valores inválidos reciben
+`422`. La interfaz muestra nombres, descripciones, tipos, estados y fechas locales
+mediante renderizado seguro.
+
+```json
+{"name":"Copias de respaldo","description":"Respaldo diario","type":"corrective","status":"implemented"}
+```
+
+| Método | Ruta | Resultado |
+| --- | --- | --- |
+| POST | `/controls` | Crea el control y devuelve `201` con sus datos públicos |
+| GET | `/controls` | Lista por ID; filtros `type` y `status` combinados con AND; sin coincidencias `[]` |
+| GET | `/controls/{control_id}` | Detalle o `404` |
+| GET | `/risks/{risk_id}/controls` | Controles asociados por ID o `[]` |
+| POST | `/risks/{risk_id}/controls` | Cuerpo `{"control_id": 1}`; devuelve `201` con la pareja; duplicado `409` |
+| DELETE | `/risks/{risk_id}/controls/{control_id}` | Elimina solo el vínculo; `204` vacío; vínculo ausente `404` |
+
+Administrador y analista crean, vinculan y desvinculan; lector solo consulta.
+Todas las rutas requieren sesión; las escrituras exigen `X-CSRF-Token`. Recursos
+inexistentes o ajenos reciben `404`. El ID del vínculo debe ser un entero positivo
+estricto; booleanos, decimales, cadenas y campos adicionales reciben `422`.
+
+La migración **007** agrega `security_controls` y `risk_controls` sin modificar
+registros existentes. La clave primaria de la pareja evita duplicados; claves
+foráneas compuestas exigen la misma organización, también en SQL directo y al
+cambiar la organización de cualquiera de los recursos. No se permiten borrados de
+recursos con vínculos. Se conserva SQL parametrizado y se serializan escrituras
+de vínculos con `BEGIN IMMEDIATE`.
+
+El detalle de riesgo muestra **Controles asociados** y ofrece solo controles
+propios que todavía no estén vinculados. Quitar el vínculo conserva riesgo y
+control, y permite seleccionarlo otra vez. La asociación documenta una medida:
+**no cambia automáticamente el puntaje o nivel ni demuestra la eficacia del
+control**. Se pueden documentar controles planificados, implementados o retirados.
+Evaluación residual, edición y eliminación de controles quedan pendientes.
+
+Comprobación manual:
+
+1. Ingresar como administrador o analista y crear controles de distintos tipos y
+   estados, con y sin descripción. Comprobar recorte del nombre, detalle y fecha local.
+2. Filtrar por tipo y estado individualmente y juntos; probar una combinación sin
+   resultados y **Limpiar**. Revisar también a ancho móvil y con texto que contenga HTML.
+3. Crear dos riesgos. Vincular varios controles al primero y el mismo control al
+   segundo; comprobar que el selector excluye los asociados y que puntaje/nivel
+   no cambian. Quitar un vínculo: ambos recursos y el vínculo del segundo riesgo
+   deben permanecer. En `/docs`, repetir POST da `409` y repetir DELETE da `404`
+   (con cookie de sesión y cabecera CSRF).
+4. Reiniciar la API y comprobar controles, vínculos y datos anteriores. Ingresar
+   como lector: ver listas y detalles sin botones de creación/vinculación/desvinculación.
+5. Desde otra organización, consultar o vincular IDs anteriores debe dar `404`.
+   Interrumpir la conexión: comprobar mensajes y recuperación en listado, detalle
+   y **Controles asociados** mediante los reintentos disponibles.
+
+Las pruebas cubren los nueve pares de tipo/estado, validaciones, permisos y CSRF,
+relaciones muchos a muchos, duplicados (incluidas peticiones concurrentes),
+desvinculación, aislamiento en ambas direcciones y restricciones de SQL directo.
+También comparan todos los datos previos y secuencias de IDs al migrar y comprueban
+persistencia tras reiniciar. Chrome verifica los flujos, lector, textos seguros,
+errores de red y anchos 1280/390 con una base temporal.

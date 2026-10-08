@@ -215,6 +215,28 @@ class IncidentAssetCreate(BaseModel):
     asset_id: int = Field(strict=True, gt=0)
 
 
+class ControlCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    description: str | None = None
+    type: Literal["preventive", "detective", "corrective"]
+    status: Literal["planned", "implemented", "retired"] = "planned"
+
+
+class SecurityControl(ControlCreate):
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    created_at: datetime
+
+
+class RiskControlCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    control_id: int = Field(strict=True, gt=0)
+
+
 RiskLevel = Literal["low", "medium", "high", "critical"]
 RiskStatus = Literal["identified", "treating", "accepted"]
 RISK_LEVEL_RANGES = {"low": (1, 4), "medium": (5, 9), "high": (10, 16), "critical": (17, 25)}
@@ -499,6 +521,111 @@ def reset_user_password(
         )
         connection.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
     return {"status": "ok"}
+
+
+@app.post("/controls", response_model=SecurityControl, status_code=201)
+def create_control(control: ControlCreate, user: dict = Depends(require_roles("administrador", "analista"))):
+    created_at = datetime.now(timezone.utc).isoformat()
+    with closing(connect()) as connection, connection:
+        cursor = connection.execute(
+            "INSERT INTO security_controls (organization_id, name, description, type, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (user["organization_id"], control.name, control.description, control.type, control.status, created_at),
+        )
+        row = connection.execute(
+            "SELECT * FROM security_controls WHERE id = ? AND organization_id = ?",
+            (cursor.lastrowid, user["organization_id"]),
+        ).fetchone()
+    return dict(row)
+
+
+@app.get("/controls", response_model=list[SecurityControl])
+def list_controls(type: Literal["preventive", "detective", "corrective"] | None = None,
+                  status: Literal["planned", "implemented", "retired"] | None = None,
+                  user: dict = Depends(require_user)):
+    conditions = ["organization_id = ?"]
+    parameters = [user["organization_id"]]
+    if type is not None:
+        conditions.append("type = ?")
+        parameters.append(type)
+    if status is not None:
+        conditions.append("status = ?")
+        parameters.append(status)
+    with closing(connect()) as connection:
+        rows = connection.execute(
+            "SELECT * FROM security_controls WHERE " + " AND ".join(conditions) + " ORDER BY id",
+            parameters,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.get("/controls/{control_id}", response_model=SecurityControl)
+def get_control(control_id: int, user: dict = Depends(require_user)):
+    with closing(connect()) as connection:
+        row = connection.execute(
+            "SELECT * FROM security_controls WHERE id = ? AND organization_id = ?",
+            (control_id, user["organization_id"]),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Control not found")
+    return dict(row)
+
+
+def require_risk_control_resources(connection, risk_id, organization_id, control_id=None):
+    if connection.execute(
+        "SELECT id FROM risks WHERE id = ? AND organization_id = ?", (risk_id, organization_id),
+    ).fetchone() is None:
+        raise HTTPException(status_code=404, detail="Risk not found")
+    if control_id is not None and connection.execute(
+        "SELECT id FROM security_controls WHERE id = ? AND organization_id = ?", (control_id, organization_id),
+    ).fetchone() is None:
+        raise HTTPException(status_code=404, detail="Control not found")
+
+
+@app.get("/risks/{risk_id}/controls", response_model=list[SecurityControl])
+def list_risk_controls(risk_id: int, user: dict = Depends(require_user)):
+    with closing(connect()) as connection:
+        require_risk_control_resources(connection, risk_id, user["organization_id"])
+        rows = connection.execute(
+            "SELECT c.* FROM security_controls c JOIN risk_controls rc "
+            "ON c.id = rc.control_id AND c.organization_id = rc.organization_id "
+            "WHERE rc.risk_id = ? AND rc.organization_id = ? ORDER BY c.id",
+            (risk_id, user["organization_id"]),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.post("/risks/{risk_id}/controls", status_code=201)
+def link_risk_control(risk_id: int, link: RiskControlCreate,
+                      user: dict = Depends(require_roles("administrador", "analista"))):
+    with closing(connect()) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        require_risk_control_resources(connection, risk_id, user["organization_id"], link.control_id)
+        if connection.execute(
+            "SELECT 1 FROM risk_controls WHERE risk_id = ? AND control_id = ? AND organization_id = ?",
+            (risk_id, link.control_id, user["organization_id"]),
+        ).fetchone():
+            raise HTTPException(status_code=409, detail="Control already linked")
+        connection.execute(
+            "INSERT INTO risk_controls (risk_id, control_id, organization_id) VALUES (?, ?, ?)",
+            (risk_id, link.control_id, user["organization_id"]),
+        )
+    return {"risk_id": risk_id, "control_id": link.control_id}
+
+
+@app.delete("/risks/{risk_id}/controls/{control_id}", status_code=204)
+def unlink_risk_control(risk_id: int, control_id: int,
+                        user: dict = Depends(require_roles("administrador", "analista"))):
+    with closing(connect()) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        require_risk_control_resources(connection, risk_id, user["organization_id"], control_id)
+        cursor = connection.execute(
+            "DELETE FROM risk_controls WHERE risk_id = ? AND control_id = ? AND organization_id = ?",
+            (risk_id, control_id, user["organization_id"]),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Link not found")
+    return Response(status_code=204)
 
 
 @app.post("/risks", response_model=Risk, status_code=201)

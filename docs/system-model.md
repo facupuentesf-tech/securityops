@@ -69,6 +69,8 @@ The implemented role permissions are:
 | Create assets | Yes | Yes | No |
 | Read risks | Yes | Yes | Yes |
 | Create risks | Yes | Yes | No |
+| Read controls and risk-control links | Yes | Yes | Yes |
+| Create controls, link and unlink | Yes | Yes | No |
 | Link and unlink incident assets | Yes | Yes | No |
 | Manage users and reset passwords | Yes | No | No |
 
@@ -81,7 +83,7 @@ for shared deployment.
 ## Original Domain Vision: Future Work
 
 The following entities and relationships preserve the original vision.
-Asset extensions, risk extensions, controls and general audit logs remain future work.
+Asset extensions, risk/control extensions and general audit logs remain future work.
 Responsible users for incidents remain future work.
 
 The planned domain entities are:
@@ -196,4 +198,18 @@ have multiple risks. Server validation and composite foreign keys both enforce
 this association. Score is probability × impact and level is derived using the
 prototype's own thresholds: low 1–4, medium 5–9, high 10–16, critical 17–25.
 Some integer scores within the intervals cannot be produced by the 5×5 factors.
-This is an initial assessment with no controls or residual-risk calculation.
+This is an initial assessment with no residual-risk calculation.
+
+## Initial security control model (implemented)
+
+A security control documents a measure owned by one organization. Its name is
+trimmed and nonempty; description is optional. Type is preventive, detective or
+corrective; status is planned, implemented or retired, defaulting to planned.
+Each record has an ID and UTC creation timestamp.
+
+Risks and controls have a many-to-many relationship within the same organization.
+Each pair appears at most once. Linking and unlinking do not alter either resource
+or any other relationship. All control states may be associated to document the
+measure's current state. The association alone neither changes initial risk score
+and level nor proves efficacy. No residual assessment, control editing or control
+deletion is implemented.

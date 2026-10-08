@@ -60,6 +60,8 @@ prototype with server-enforced tenant isolation. It provides:
 - Asset creation, listing and detail with optional type/criticality filters.
 - Initial risk creation, listing and detail with optional asset association,
   strict probability/impact values, server-derived score/level and AND filters.
+- Security control creation, listing/detail and type/status AND filters, with
+  many-to-many risk associations protected by organization in the API and database.
 - Status changes with persistent history recorded atomically with the update.
 - Investigation notes with validation and persistent storage.
 - User login/logout, scrypt password hashes, opaque server-side sessions in
@@ -89,8 +91,8 @@ The original project roadmap is preserved. Beyond the initial incident module,
 the following capabilities remain future work:
 
 1. Asset editing, deletion, ownership assignment
-2. Risk editing/deletion, control associations and residual evaluation
-3. Security controls
+2. Risk editing/deletion and residual evaluation
+3. Security control editing/deletion and effectiveness assessment
 4. Extended incident management with responsible users
 5. General audit logs
 6. Dashboard and basic metrics
@@ -132,5 +134,16 @@ list, creation, detail and filters by status, level and asset. The server enforc
 roles, CSRF, validation and same-organization associations; the database protects
 the association with a composite foreign key while preserving prior data.
 Score is probability × impact (integer factors 1–5). The prototype defines its own
-levels: low 1–4, medium 5–9, high 10–16, critical 17–25. Editing, deletion, controls
+levels: low 1–4, medium 5–9, high 10–16, critical 17–25. Editing, deletion
 and residual evaluation are deferred.
+
+## Initial security controls
+
+Migration 007 introduces organization-owned security controls and many-to-many
+risk associations. Administrators and analysts create/link/unlink; readers query.
+The Spanish UI includes control list, filtering, creation/detail and “Controles
+asociados” on risk details, excluding already-linked controls from the selector.
+The relationship documents a measure, preserves the risk score and makes no
+effectiveness claim. Residual evaluation and control editing/deletion remain
+future work. Versioned migration tests verify preservation of prior module data;
+API and Chrome tests cover permissions, isolation, relations and interface flows.

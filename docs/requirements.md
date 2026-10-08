@@ -112,7 +112,7 @@ and backend-enforced role-based permissions.
 
 ## Original Requirements: Future Work
 
-Asset extensions, risk extensions, controls, general audit logs and shared deployment remain
+Asset extensions, risk/control extensions, general audit logs and shared deployment remain
 future work. Multi-organization data isolation is implemented, but this remains
 a local prototype bound to `127.0.0.1` and is not intended for shared deployment.
 
@@ -142,7 +142,7 @@ Each risk should have:
 - Responsible person
 - Status
 
-### 3. Security Controls
+### 3. Security control extensions
 
 The system must allow organizations to define and track security controls.
 
@@ -209,4 +209,30 @@ preservation and restart persistence; Chrome smoke checks cover the interface.
 - The responsive Spanish section provides list, filters, creation and detail,
   optional organization asset selection, safe text rendering and loading/empty/error
   feedback. Data persists across server restarts.
-- Editing, deletion, controls, owner assignment and residual evaluation remain future work.
+- Editing, deletion, owner assignment and residual evaluation remain future work.
+
+## Initial security controls (implemented)
+
+- Controls have a trimmed nonempty name, optional nullable description, type
+  preventive/detective/corrective, status planned/implemented/retired (default
+  planned), ID and UTC creation time. `POST /controls` returns `201`.
+- `GET /controls` lists by ID, with type/status filters combined with AND and
+  `[]` for no matches. `GET /controls/{control_id}` returns the public control.
+- Extra fields including organization_id are rejected (`422`). Organization is
+  session-derived; identifiers missing or belonging to another organization give `404`.
+- A risk may have many controls and a control may have many risks. Duplicate links
+  are prohibited. `GET /risks/{risk_id}/controls` returns full control records or `[]`.
+- `POST` on the relation path accepts only `{"control_id": ID}` with a strict
+  positive integer. Creation returns `201` with the pair, duplicates `409`.
+- `DELETE /risks/{risk_id}/controls/{control_id}` returns empty `204`, or `404` for
+  an absent link. It preserves both resources and all their other links.
+- Administrators/analysts create, link and unlink. Readers only consult. Existing
+  authentication, CSRF and parameterized SQL apply to every route.
+- Migration 007 preserves all prior data and enforces organization integrity with
+  composite foreign keys and a unique relation pair.
+- The Spanish UI provides control list, filters, creation/detail and a risk detail
+  section “Controles asociados”; its selector excludes foreign and already-linked
+  controls. It is responsive, safely renders user text, respects roles and shows
+  loading, empty, error and retry feedback.
+- Association documents a measure, does not change score/level or demonstrate
+  effectiveness. Residual evaluation and control editing/deletion remain pending.
