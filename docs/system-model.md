@@ -37,7 +37,7 @@ type (`hardware`, `software`, `service`, `data`), optional description,
 criticality (`low`, `medium`, `high`, `critical`) and UTC creation timestamp.
 Administrators and analysts create assets; all authenticated roles can list,
 filter and view details. Type and criticality filters combine with AND.
-Editing, deletion, ownership assignment and incident links are future work.
+Editing, deletion, ownership assignment are future work.
 
 An **account** has a display name, unique email, scrypt password hash, active
 flag, exactly one of three roles and belongs to one organization. Administrators
@@ -67,6 +67,7 @@ The implemented role permissions are:
 | Create incidents, change status, add notes | Yes | Yes | No |
 | Read assets | Yes | Yes | Yes |
 | Create assets | Yes | Yes | No |
+| Link and unlink incident assets | Yes | Yes | No |
 | Manage users and reset passwords | Yes | No | No |
 
 The HTML/CSS/JavaScript interface is in Spanish, calls the FastAPI API and
@@ -79,7 +80,7 @@ for shared deployment.
 
 The following entities and relationships preserve the original vision.
 Asset extensions, risks, controls and general audit logs are not yet implemented.
-Responsible users and asset links for incidents are also future work.
+Responsible users for incidents remain future work.
 
 The planned domain entities are:
 
@@ -93,7 +94,7 @@ The planned domain entities are:
 ### Asset extensions
 
 Asset creation and queries are implemented. Editing, deletion, ownership and
-incident links remain planned. Assets represent technological resources belonging to an organization.
+extensions remain planned. Assets represent technological resources belonging to an organization.
 
 Examples:
 
@@ -157,3 +158,25 @@ Examples:
 - Risk modifications
 - Incident creation
 - Permission changes
+
+## Incident-asset links (implemented)
+
+Migration 005 adds `incident_assets(incident_id, asset_id, organization_id)` without
+rewriting existing records. Each incident and asset can participate in multiple
+links. The pair is the primary key. Composite foreign keys reference unique
+`(id, organization_id)` indexes on incidents and assets, enforcing tenant integrity
+on inserts, updates and parent organization changes. Parent removal with links is
+restricted. Unlinking deletes only a relationship.
+
+`GET /incidents/{incident_id}/assets` returns full asset records ordered by ID or
+`[]`. `POST` on that path accepts only `{"asset_id": ID}` (positive strict integer),
+returns `201` with the pair, and `409` for duplicates. `DELETE` on
+`/incidents/{incident_id}/assets/{asset_id}` returns an empty `204`, or `404` when
+absent. Missing or foreign resources return `404`. All roles read; administrators
+and analysts write with session authentication and CSRF. SQL values are bound.
+
+The responsive incident detail includes "Activos afectados", safe text rendering,
+a selector excluding linked assets, unlink buttons, loading/empty/error feedback
+and retry. Reader controls are hidden. Automated API tests cover relationships,
+validation, permissions, CSRF, tenant isolation, database constraints, migration
+preservation and restart persistence; Chrome smoke checks cover the interface.

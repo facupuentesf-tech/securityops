@@ -86,10 +86,10 @@ envisioned below. Shared deployment is not implemented or supported.
 The original project roadmap is preserved. Beyond the initial incident module,
 the following capabilities remain future work:
 
-1. Asset editing, deletion, ownership assignment and links to incidents
+1. Asset editing, deletion, ownership assignment
 2. Risk management
 3. Security controls
-4. Extended incident management with responsible users and related assets
+4. Extended incident management with responsible users
 5. General audit logs
 6. Dashboard and basic metrics
 
@@ -99,3 +99,25 @@ for future versions.
 
 React, PostgreSQL and Docker remain options for later stages; the implemented
 version uses plain HTML/CSS/JavaScript, Python with FastAPI and SQLite.
+
+## Incident-asset links (implemented)
+
+Migration 005 adds `incident_assets(incident_id, asset_id, organization_id)` without
+rewriting existing records. Each incident and asset can participate in multiple
+links. The pair is the primary key. Composite foreign keys reference unique
+`(id, organization_id)` indexes on incidents and assets, enforcing tenant integrity
+on inserts, updates and parent organization changes. Parent removal with links is
+restricted. Unlinking deletes only a relationship.
+
+`GET /incidents/{incident_id}/assets` returns full asset records ordered by ID or
+`[]`. `POST` on that path accepts only `{"asset_id": ID}` (positive strict integer),
+returns `201` with the pair, and `409` for duplicates. `DELETE` on
+`/incidents/{incident_id}/assets/{asset_id}` returns an empty `204`, or `404` when
+absent. Missing or foreign resources return `404`. All roles read; administrators
+and analysts write with session authentication and CSRF. SQL values are bound.
+
+The responsive incident detail includes "Activos afectados", safe text rendering,
+a selector excluding linked assets, unlink buttons, loading/empty/error feedback
+and retry. Reader controls are hidden. Automated API tests cover relationships,
+validation, permissions, CSRF, tenant isolation, database constraints, migration
+preservation and restart persistence; Chrome smoke checks cover the interface.

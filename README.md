@@ -18,6 +18,7 @@ compartido.
 ### Funciones implementadas
 
 - Crear, listar y consultar incidentes.
+- Vincular varios activos por incidente y quitar vínculos sin borrar recursos.
 - Crear, listar y consultar activos, con filtros por tipo y criticidad combinados con AND.
 - Filtrar por estado y severidad, individualmente o combinados.
 - Cambiar el estado y consultar su historial persistente.
@@ -44,6 +45,7 @@ compartido.
 | Crear incidentes, cambiar estado y agregar notas | Sí | Sí | No |
 | Consultar activos | Sí | Sí | Sí |
 | Crear activos | Sí | Sí | No |
+| Vincular y desvincular activos de incidentes | Sí | Sí | No |
 | Gestionar usuarios (crear, editar, desactivar y restablecer contraseña) | Sí | No | No |
 
 Los cambios existentes anteriores a las migraciones mantienen su contenido,
@@ -58,7 +60,7 @@ Aún no están implementados:
 - Edición, eliminación y asignación de responsables de activos
 - Gestión de riesgos
 - Controles de seguridad
-- Ampliación de incidentes con responsables y activos relacionados
+- Ampliación de incidentes con responsables
 - Auditoría general más allá del historial de incidentes
 - Reportes
 - Dashboard
@@ -86,7 +88,7 @@ El nombre es obligatorio, se recorta y no puede quedar vacío. Tipos admitidos:
 `critical`. La descripción es opcional: omitida o null se almacena como null.
 El servidor asigna ID, organización y fecha UTC. Los campos extra, incluido
 `organization_id`, y los filtros inválidos devuelven `422`. Sin coincidencias,
-el listado devuelve `[]`. No hay edición, eliminación ni vínculo con incidentes.
+el listado devuelve `[]`. No hay edición ni eliminación de activos.
 
 Para comprobarlo manualmente:
 
@@ -400,5 +402,38 @@ locales y controles de creación ocultos para lectores.
 
 Prototipo funcional local con autenticación, permisos y aislamiento entre
 organizaciones, con creación y consulta de activos. Edición y eliminación de
-activos, vinculación con incidentes, riesgos, controles, auditoría general,
+activos, riesgos, controles, auditoría general,
 reportes y dashboard continúan pendientes.
+
+## Activos afectados por incidente
+
+La migración 005 incorpora `incident_assets`: relación muchos a muchos sin modificar
+los datos existentes. La clave primaria impide duplicados y las claves foráneas
+compuestas exigen que ambos recursos pertenezcan a la misma organización; también
+impiden cambiar la organización de un recurso con vínculos. Las migraciones se
+aplican automáticamente al iniciar la API.
+
+| Método | Ruta | Resultado |
+| --- | --- | --- |
+| GET | `/incidents/{incident_id}/assets` | Activos vinculados por ID o `[]` |
+| POST | `/incidents/{incident_id}/assets` | Cuerpo `{"asset_id": 1}`, `201`; duplicado `409` |
+| DELETE | `/incidents/{incident_id}/assets/{asset_id}` | Quita solo el vínculo, `204`; ausente `404` |
+
+Administrador y analista pueden vincular y quitar vínculos; lector solo consulta.
+Se exige sesión y CSRF para escrituras. Recursos inexistentes o de otra organización
+responden `404`. El ID del cuerpo debe ser un entero positivo; campos extra se
+rechazan con `422`. La interfaz muestra **Activos afectados**, excluye del selector
+los ya vinculados y ofrece mensajes de carga, vacío, error y reintento.
+
+Comprobación manual:
+
+1. Crear dos activos y dos incidentes. Vincular varios activos al primer incidente
+   y el mismo activo al segundo; comprobar que el selector excluye los vinculados.
+2. Recargar y reiniciar el servidor: comprobar vínculos, activos, notas e historial.
+3. Quitar un vínculo: el activo y ambos incidentes deben conservarse, al igual que
+   el vínculo del otro incidente. En `/docs`, repetir POST debe dar `409` y repetir
+   DELETE debe dar `404` (con cookie de sesión y cabecera `X-CSRF-Token`).
+4. Ingresar como lector: ver la lista sin controles de escritura. Con una cuenta
+   de otra organización, comprobar que los IDs ajenos devuelven `404`.
+5. Revisar a ancho móvil, con nombres que contengan HTML y con conexión interrumpida;
+   comprobar texto seguro, ausencia de desbordamiento y recuperación con Reintentar.

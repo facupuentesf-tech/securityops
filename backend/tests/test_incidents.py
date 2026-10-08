@@ -106,7 +106,7 @@ class IncidentTests(unittest.TestCase):
         except HTTPError as error:
             response = error
         with response:
-            return response.status, json.load(response)
+            return response.status, None if response.status == 204 else json.load(response)
 
     def login_client(self, email, password):
         client = (build_opener(HTTPCookieProcessor(CookieJar())), None)
@@ -442,7 +442,7 @@ class IncidentTests(unittest.TestCase):
         with closing(sqlite3.connect(self.database)) as connection:
             self.assertEqual(
                 connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(),
-                [(1,), (2,), (3,), (4,)],
+                [(1,), (2,), (3,), (4,), (5,)],
             )
             self.assertEqual(
                 connection.execute("SELECT organization_id FROM incidents WHERE id = 17").fetchone()[0],
@@ -1110,6 +1110,9 @@ class IncidentTests(unittest.TestCase):
         self.request("POST", f'/incidents/{incident["id"]}/notes', {"content": "Preserved note"})
         self.stop_server()
         with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("DROP TABLE incident_assets")
+            connection.execute("DROP INDEX idx_incidents_id_organization")
+            connection.execute("DELETE FROM schema_migrations WHERE version = 5")
             connection.execute("DROP TABLE assets")
             connection.execute("DELETE FROM schema_migrations WHERE version = 4")
             tables = ("organizations", "users", "sessions", "incidents", "incident_status_history", "incident_notes")
@@ -1118,7 +1121,7 @@ class IncidentTests(unittest.TestCase):
         with closing(sqlite3.connect(self.database)) as connection:
             after = {table: connection.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() for table in tables}
             self.assertEqual(before, after)
-            self.assertEqual(connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(), [(1,), (2,), (3,), (4,)])
+            self.assertEqual(connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(), [(1,), (2,), (3,), (4,), (5,)])
         code, asset = self.request("POST", "/assets", self.asset_payload(description="Persistent asset"))
         self.assertEqual(code, 201)
         self.stop_server()
@@ -1137,6 +1140,106 @@ class IncidentTests(unittest.TestCase):
                         tuple(values.values()),
                     )
                 connection.rollback()
+
+    def test_incident_asset_links_and_persistence(self):
+        incident = self.request("POST", "/incidents", self.payload())[1]
+        other = self.request("POST", "/incidents", self.payload())[1]
+        assets = [self.request("POST", "/assets", self.asset_payload(name=name))[1]
+                  for name in ("Server", "Database")]
+        path = f'/incidents/{incident["id"]}/assets'
+        self.assertEqual(self.request("GET", path), (200, []))
+        for asset in assets:
+            self.assertEqual(self.request("POST", path, {"asset_id": asset["id"]})[0], 201)
+            self.assertEqual(self.request("POST", path, {"asset_id": asset["id"]})[0], 409)
+        self.assertEqual(self.request("POST", f'/incidents/{other["id"]}/assets', {"asset_id": assets[0]["id"]})[0], 201)
+        self.assertEqual(self.request("GET", path), (200, assets))
+        self.stop_server()
+        self.start_server()
+        self.assertEqual(self.request("GET", path), (200, assets))
+        self.assertEqual(self.request("DELETE", path + f'/{assets[0]["id"]}'), (204, None))
+        self.assertEqual(self.request("DELETE", path + f'/{assets[0]["id"]}')[0], 404)
+        self.assertEqual(self.request("GET", path), (200, [assets[1]]))
+        self.assertEqual(self.request("GET", f'/assets/{assets[0]["id"]}'), (200, assets[0]))
+        self.assertEqual(self.request("GET", f'/incidents/{incident["id"]}'), (200, incident))
+        self.assertEqual(self.request("GET", f'/incidents/{other["id"]}/assets'), (200, [assets[0]]))
+
+    def test_incident_asset_validation_permissions_and_isolation(self):
+        incident = self.request("POST", "/incidents", self.payload())[1]
+        asset = self.request("POST", "/assets", self.asset_payload())[1]
+        path = f'/incidents/{incident["id"]}/assets'
+        body = {"asset_id": asset["id"]}
+        for payload in ({}, {"asset_id": None}, {"asset_id": True}, {"asset_id": "1"},
+                        {"asset_id": 0}, {"asset_id": -1}, {"asset_id": 1.5}, body | {"organization_id": 1}):
+            self.assertEqual(self.request("POST", path, payload)[0], 422)
+        anonymous = (build_opener(HTTPCookieProcessor(CookieJar())), None)
+        for method, suffix, payload in (("GET", "", None), ("POST", "", body), ("DELETE", f'/{asset["id"]}', None)):
+            self.assertEqual(self.request(method, path + suffix, payload, client=anonymous)[0], 401)
+            if method != "GET":
+                self.assertEqual(self.request(method, path + suffix, payload, send_csrf=False)[0], 403)
+                self.assertEqual(self.request(method, path + suffix, payload, client=(self.opener, "bad"))[0], 403)
+        for role in ("analista", "lector"):
+            self.request("POST", "/users", {"display_name": role, "email": f"{role}@example.test",
+                         "password": "link user password", "role": role})
+        analyst = self.login_client("analista@example.test", "link user password")
+        reader = self.login_client("lector@example.test", "link user password")
+        self.assertEqual(self.request("POST", path, body, client=reader)[0], 403)
+        self.assertEqual(self.request("DELETE", path + f'/{asset["id"]}', client=reader)[0], 403)
+        self.assertEqual(self.request("POST", path, body, client=analyst)[0], 201)
+        self.assertEqual(self.request("GET", path, client=reader), (200, [asset]))
+        self.assertEqual(self.request("DELETE", path + f'/{asset["id"]}', client=analyst)[0], 204)
+        with closing(app_main.connect()) as connection, connection:
+            connection.execute("INSERT INTO organizations (name, created_at) VALUES ('Foreign', '2026-01-01')")
+            foreign_incident = connection.execute(
+                "INSERT INTO incidents (title, description, severity, status, created_at, organization_id) "
+                "VALUES ('Foreign', 'Foreign', 'high', 'open', '2026-01-01', 2)").lastrowid
+            foreign_asset = connection.execute(
+                "INSERT INTO assets (name, type, criticality, created_at, organization_id) "
+                "VALUES ('Foreign', 'data', 'high', '2026-01-01', 2)").lastrowid
+        for target in (foreign_incident, 999999):
+            foreign_path = f'/incidents/{target}/assets'
+            self.assertEqual(self.request("GET", foreign_path)[0], 404)
+            self.assertEqual(self.request("POST", foreign_path, body)[0], 404)
+            self.assertEqual(self.request("DELETE", foreign_path + f'/{asset["id"]}')[0], 404)
+        for target in (foreign_asset, 999999):
+            self.assertEqual(self.request("POST", path, {"asset_id": target})[0], 404)
+            self.assertEqual(self.request("DELETE", path + f'/{target}')[0], 404)
+        with closing(app_main.connect()) as connection:
+            for values in ((incident["id"], foreign_asset, 1), (foreign_incident, asset["id"], 2),
+                           (incident["id"], asset["id"], 2), (999999, asset["id"], 1)):
+                with self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute("INSERT INTO incident_assets VALUES (?, ?, ?)", values)
+                connection.rollback()
+            connection.execute("INSERT INTO incident_assets VALUES (?, ?, 1)", (incident["id"], asset["id"]))
+            connection.commit()
+            for sql, values in (("INSERT INTO incident_assets VALUES (?, ?, 1)", (incident["id"], asset["id"])),
+                                ("UPDATE assets SET organization_id = 2 WHERE id = ?", (asset["id"],)),
+                                ("UPDATE incidents SET organization_id = 2 WHERE id = ?", (incident["id"],)),
+                                ("UPDATE incident_assets SET organization_id = 2 WHERE incident_id = ?", (incident["id"],))):
+                with self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(sql, values)
+                connection.rollback()
+            self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
+
+    def test_link_migration_preserves_all_existing_data(self):
+        incident = self.request("POST", "/incidents", self.payload())[1]
+        self.request("POST", "/assets", self.asset_payload())
+        self.request("POST", f'/incidents/{incident["id"]}/notes', {"content": "Preserve"})
+        self.request("PATCH", f'/incidents/{incident["id"]}/status', {"status": "resolved"})
+        self.stop_server()
+        tables = ("organizations", "users", "sessions", "incidents", "assets", "incident_notes", "incident_status_history")
+        with closing(app_main.connect()) as connection, connection:
+            connection.execute("DROP TABLE incident_assets")
+            connection.execute("DROP INDEX idx_incidents_id_organization")
+            connection.execute("DROP INDEX idx_assets_id_organization")
+            connection.execute("DELETE FROM schema_migrations WHERE version = 5")
+            before = {table: connection.execute(f"SELECT * FROM {table}").fetchall() for table in tables}
+        app_main.migrate_database()
+        app_main.migrate_database()
+        with closing(app_main.connect()) as connection:
+            after = {table: connection.execute(f"SELECT * FROM {table}").fetchall() for table in tables}
+            self.assertEqual(before, after)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM incident_assets").fetchone()[0], 0)
+        self.start_server()
 
     def test_persistence_after_process_restart(self):
         code, incident = self.request("POST", "/incidents", self.payload())

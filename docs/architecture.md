@@ -145,5 +145,27 @@ database, including authentication, permissions, migration of legacy data,
 incident and asset workflows, tenant isolation and persistence. An optional Node.js/Chrome smoke
 test exercises the authenticated interface at desktop and mobile widths.
 
-Asset editing, deletion and incident links, risks, controls, general audit logs, reports and dashboards remain
+Asset editing and deletion, risks, controls, general audit logs, reports and dashboards remain
 future work. React, PostgreSQL and Docker are possible later choices.
+
+## Incident-asset links (implemented)
+
+Migration 005 adds `incident_assets(incident_id, asset_id, organization_id)` without
+rewriting existing records. Each incident and asset can participate in multiple
+links. The pair is the primary key. Composite foreign keys reference unique
+`(id, organization_id)` indexes on incidents and assets, enforcing tenant integrity
+on inserts, updates and parent organization changes. Parent removal with links is
+restricted. Unlinking deletes only a relationship.
+
+`GET /incidents/{incident_id}/assets` returns full asset records ordered by ID or
+`[]`. `POST` on that path accepts only `{"asset_id": ID}` (positive strict integer),
+returns `201` with the pair, and `409` for duplicates. `DELETE` on
+`/incidents/{incident_id}/assets/{asset_id}` returns an empty `204`, or `404` when
+absent. Missing or foreign resources return `404`. All roles read; administrators
+and analysts write with session authentication and CSRF. SQL values are bound.
+
+The responsive incident detail includes "Activos afectados", safe text rendering,
+a selector excluding linked assets, unlink buttons, loading/empty/error feedback
+and retry. Reader controls are hidden. Automated API tests cover relationships,
+validation, permissions, CSRF, tenant isolation, database constraints, migration
+preservation and restart persistence; Chrome smoke checks cover the interface.

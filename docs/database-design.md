@@ -6,7 +6,7 @@ The local version uses SQLite, by default at `backend/securityops.db`. The
 default path is relative to the backend module and can be overridden with
 `SECURITYOPS_DATABASE`. Numbered SQL migrations in `backend/migrations` are
 tracked in `schema_migrations`; database files are excluded from Git.
-Migrations 001–004 preserve existing incident, history, note, user and session
+Migrations 001–005 preserve existing incident, history, note, user and session
 data while assigning existing users and incidents to the initial organization.
 
 ## Implemented Schema
@@ -41,7 +41,7 @@ altering existing tables or data. Assets are listed by ascending ID. Type and
 criticality filters combine with AND and use bound SQL parameters within the
 authenticated organization. Asset response models omit the internal organization
 ID; creation rejects client-supplied associations. Editing, deletion, ownership
-assignment and incident links remain future work.
+assignment remain future work.
 
 ### incidents
 
@@ -153,10 +153,10 @@ browser's timezone. Incident, history, note and asset data survive server restar
 
 ## Domain entities still planned
 
-Asset editing, deletion and incident links, risks, controls and general audit logs remain future work.
+Asset editing and deletion, risks, controls and general audit logs remain future work.
 Multi-organization isolation is implemented for the current asset, incident and user
-operations. Proposed incident fields such as `asset_id` and `assigned_to`
-are not columns in the current `incidents` table. PostgreSQL remains a possible
+operations. Incident links use the separate `incident_assets` table; `assigned_to` remains
+a planned extension. PostgreSQL remains a possible
 later database.
 
 The planned entities are:
@@ -169,7 +169,7 @@ The planned entities are:
 
 ### Asset extensions
 
-Editing, deletion, an `owner_id` association and links to incidents are planned.
+Editing, deletion, an `owner_id` association are planned.
 They are not present in the current schema or API.
 
 ### Risks
@@ -212,7 +212,6 @@ Main fields:
 
 - id
 - organization_id
-- asset_id
 - title
 - description
 - severity
@@ -234,3 +233,25 @@ Main fields:
 - entity_id
 - timestamp
 - ip_address
+
+## Incident-asset links (implemented)
+
+Migration 005 adds `incident_assets(incident_id, asset_id, organization_id)` without
+rewriting existing records. Each incident and asset can participate in multiple
+links. The pair is the primary key. Composite foreign keys reference unique
+`(id, organization_id)` indexes on incidents and assets, enforcing tenant integrity
+on inserts, updates and parent organization changes. Parent removal with links is
+restricted. Unlinking deletes only a relationship.
+
+`GET /incidents/{incident_id}/assets` returns full asset records ordered by ID or
+`[]`. `POST` on that path accepts only `{"asset_id": ID}` (positive strict integer),
+returns `201` with the pair, and `409` for duplicates. `DELETE` on
+`/incidents/{incident_id}/assets/{asset_id}` returns an empty `204`, or `404` when
+absent. Missing or foreign resources return `404`. All roles read; administrators
+and analysts write with session authentication and CSRF. SQL values are bound.
+
+The responsive incident detail includes "Activos afectados", safe text rendering,
+a selector excluding linked assets, unlink buttons, loading/empty/error feedback
+and retry. Reader controls are hidden. Automated API tests cover relationships,
+validation, permissions, CSRF, tenant isolation, database constraints, migration
+preservation and restart persistence; Chrome smoke checks cover the interface.

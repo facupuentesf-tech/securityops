@@ -209,6 +209,12 @@ class Asset(AssetCreate):
     created_at: datetime
 
 
+class IncidentAssetCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    asset_id: int = Field(strict=True, gt=0)
+
+
 class IncidentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -493,6 +499,65 @@ def get_asset(asset_id: int, user: dict = Depends(require_user)):
     if row is None:
         raise HTTPException(status_code=404, detail="Asset not found")
     return dict(row)
+
+
+def require_incident_asset_resources(connection, incident_id, organization_id, asset_id=None):
+    if connection.execute(
+        "SELECT id FROM incidents WHERE id = ? AND organization_id = ?",
+        (incident_id, organization_id),
+    ).fetchone() is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    if asset_id is not None and connection.execute(
+        "SELECT id FROM assets WHERE id = ? AND organization_id = ?",
+        (asset_id, organization_id),
+    ).fetchone() is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+
+@app.get("/incidents/{incident_id}/assets", response_model=list[Asset])
+def list_incident_assets(incident_id: int, user: dict = Depends(require_user)):
+    with closing(connect()) as connection:
+        require_incident_asset_resources(connection, incident_id, user["organization_id"])
+        rows = connection.execute(
+            "SELECT a.* FROM assets a JOIN incident_assets ia "
+            "ON a.id = ia.asset_id AND a.organization_id = ia.organization_id "
+            "WHERE ia.incident_id = ? AND ia.organization_id = ? ORDER BY a.id",
+            (incident_id, user["organization_id"]),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.post("/incidents/{incident_id}/assets", status_code=201)
+def link_incident_asset(incident_id: int, link: IncidentAssetCreate,
+                        user: dict = Depends(require_roles("administrador", "analista"))):
+    with closing(connect()) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        require_incident_asset_resources(connection, incident_id, user["organization_id"], link.asset_id)
+        if connection.execute(
+            "SELECT 1 FROM incident_assets WHERE incident_id = ? AND asset_id = ?",
+            (incident_id, link.asset_id),
+        ).fetchone():
+            raise HTTPException(status_code=409, detail="Asset already linked")
+        connection.execute(
+            "INSERT INTO incident_assets (incident_id, asset_id, organization_id) VALUES (?, ?, ?)",
+            (incident_id, link.asset_id, user["organization_id"]),
+        )
+    return {"incident_id": incident_id, "asset_id": link.asset_id}
+
+
+@app.delete("/incidents/{incident_id}/assets/{asset_id}", status_code=204)
+def unlink_incident_asset(incident_id: int, asset_id: int,
+                          user: dict = Depends(require_roles("administrador", "analista"))):
+    with closing(connect()) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        require_incident_asset_resources(connection, incident_id, user["organization_id"], asset_id)
+        cursor = connection.execute(
+            "DELETE FROM incident_assets WHERE incident_id = ? AND asset_id = ? AND organization_id = ?",
+            (incident_id, asset_id, user["organization_id"]),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Link not found")
+    return Response(status_code=204)
 
 
 @app.post("/incidents", response_model=Incident, status_code=201)

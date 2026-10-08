@@ -103,7 +103,7 @@ async function api(path, method = "GET", body) {
     if (response.status === 422) throw new Error("Revisá los campos: completá los textos y usá valores válidos. Las notas admiten entre 1 y 5000 caracteres.");
     throw new Error("El servidor no pudo completar la operación. Volvé a intentar.");
   }
-  return response.json();
+  return response.status === 204 ? null : response.json();
 }
 function busy(form, value, text) {
   for (const control of form.elements) control.disabled = value;
@@ -259,6 +259,10 @@ async function openDetail(id, clearMessage = true) {
   $("list-view").hidden = true;
   $("detail-view").hidden = false;
   $("detail-content").hidden = true;
+  $("affected-form").hidden = true;
+  $("affected-select").replaceChildren();
+  $("affected-list").replaceChildren();
+  $("affected-feedback").textContent = "Cargando activos afectados…";
   $("detail-feedback").textContent = "Cargando incidente…";
   $("note-form").reset();
   try {
@@ -274,7 +278,7 @@ async function openDetail(id, clearMessage = true) {
     $("detail-feedback").textContent = "";
     $("detail-content").hidden = false;
     $("detail-title").focus();
-    await Promise.all([loadCollection(id, "history", version), loadCollection(id, "notes", version)]);
+    await Promise.all([loadCollection(id, "history", version), loadCollection(id, "notes", version), loadAffectedAssets(id, version)]);
   } catch (error) {
     if (version === detailVersion) {
       $("detail-feedback").textContent = error.message;
@@ -482,3 +486,75 @@ async function start() {
   }
 }
 start();
+
+let affectedVersion = 0;
+async function loadAffectedAssets(id, version) {
+  const requestVersion = ++affectedVersion;
+  const active = () => id === selectedId && version === detailVersion && requestVersion === affectedVersion && currentUser;
+  $("affected-list").replaceChildren();
+  $("affected-select").replaceChildren();
+  $("affected-form").hidden = true;
+  $("affected-retry").hidden = true;
+  $("affected-feedback").textContent = "Cargando activos afectados…";
+  try {
+    const canWrite = currentUser.role !== "lector";
+    const [linked, assets] = await Promise.all([api(`/incidents/${id}/assets`), canWrite ? api("/assets") : Promise.resolve([])]);
+    if (!active()) return;
+    $("affected-feedback").textContent = linked.length ? "" : "Todavía no hay activos vinculados.";
+    for (const asset of linked) {
+      const row = element("li");
+      row.append(element("span", `${asset.name} · ${assetTypes[asset.type]} · ${severities[asset.criticality]}`));
+      if (canWrite) {
+        const remove = element("button", "Quitar vínculo", "secondary");
+        remove.type = "button";
+        remove.setAttribute("aria-label", `Quitar vínculo con ${asset.name}`);
+        remove.addEventListener("click", async () => {
+          remove.disabled = true;
+          try {
+            await api(`/incidents/${id}/assets/${asset.id}`, "DELETE");
+            if (!active()) return;
+            message("Vínculo eliminado. El activo se conserva.");
+            await loadAffectedAssets(id, version);
+          } catch (error) { if (active()) message(error.message, true); }
+          finally { remove.disabled = false; }
+        });
+        row.append(remove);
+      }
+      $("affected-list").append(row);
+    }
+    if (canWrite) {
+      const ids = new Set(linked.map(asset => asset.id));
+      const available = assets.filter(asset => !ids.has(asset.id));
+      for (const asset of available) {
+        const option = element("option", asset.name); option.value = asset.id;
+        $("affected-select").append(option);
+      }
+      $("affected-select").selectedIndex = available.length ? 0 : -1;
+      $("affected-form").hidden = false;
+      $("affected-select").disabled = !available.length;
+      $("affected-form").querySelector("button").disabled = !available.length;
+      if (!available.length) $("affected-select").append(element("option", "No hay activos disponibles para vincular."));
+    }
+  } catch (error) {
+    if (!active()) return;
+    $("affected-feedback").textContent = error.message;
+    $("affected-retry").hidden = false;
+  }
+}
+$("affected-retry").addEventListener("click", () => loadAffectedAssets(selectedId, detailVersion));
+$("affected-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const id = selectedId, version = detailVersion, form = event.currentTarget;
+  const asset_id = parseInt($("affected-select").value, 10);
+  if (!Number.isSafeInteger(asset_id) || asset_id <= 0) { message("Seleccioná un activo disponible.", true); return; }
+  busy(form, true, "Vinculando…");
+  try {
+    await api(`/incidents/${id}/assets`, "POST", {asset_id});
+    if (id !== selectedId || version !== detailVersion) return;
+    message("Activo vinculado.");
+  } catch (error) { if (id === selectedId && version === detailVersion) message(error.message, true); }
+  finally {
+    busy(form, false);
+    if (id === selectedId && version === detailVersion && currentUser) await loadAffectedAssets(id, version);
+  }
+});

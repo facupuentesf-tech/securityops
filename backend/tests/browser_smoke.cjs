@@ -53,7 +53,7 @@ async function poll(fn) {
   await command('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
   await command('Emulation.setTimezoneOverride',{timezoneId:'America/Argentina/Buenos_Aires'});
   await command('Page.navigate',{url:base});
-  await wait(`document.getElementById('login-view').hidden === false`);
+  await wait(`document.getElementById('login-view')?.hidden === false`);
   await evaluate(`(() => {const f=document.getElementById('login-form');f.elements.email.value='admin@example.test';f.elements.password.value='correct horse battery';f.requestSubmit();})()`);
   await wait(`document.getElementById('list-feedback')?.textContent.includes('Todavía')`);
   assert.equal(await evaluate(`document.documentElement.lang`),'es');
@@ -119,11 +119,28 @@ async function poll(fn) {
   await wait(`document.querySelectorAll('#asset-list .asset').length === 1`);
   await command('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
   assert.equal(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`),true);
+  await evaluate(`document.querySelector('#incident-list .incident-title').click()`);
+  await wait(`document.getElementById('affected-feedback').textContent.includes('Todavía') && document.getElementById('affected-select').options.length === 1`);
+  await evaluate(`document.getElementById('affected-form').requestSubmit()`);
+  await wait(`document.querySelectorAll('#affected-list li').length === 1 && document.getElementById('affected-select').disabled`);
+  assert.equal(await evaluate(`document.querySelector('#affected-list span').textContent.includes(${JSON.stringify(payload)}) && !document.querySelector('#affected-list img') && !window.xss`),true);
+  await command('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+  assert.equal(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`),true);
+  await evaluate(`document.querySelector('#affected-list button').click()`);
+  await wait(`document.querySelectorAll('#affected-list li').length === 0 && !document.getElementById('affected-select').disabled`);
+  assert.equal(await evaluate(`document.querySelectorAll('#asset-list .asset').length`),1);
+  await evaluate(`document.getElementById('affected-form').requestSubmit()`);
+  await wait(`document.querySelectorAll('#affected-list li').length === 1 && document.getElementById('affected-select').disabled`);
+  await evaluate(`window.fetch=async()=>{throw new TypeError('offline')};document.getElementById('affected-retry').click()`);
+  await wait(`document.getElementById('affected-feedback').textContent.includes('No se pudo conectar')`);
+  await evaluate(`window.fetch=window.originalFetch;document.getElementById('affected-retry').click()`);
+  await wait(`document.querySelectorAll('#affected-list li').length === 1`);
+  await command('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
   const docs=await fetch(base+'/docs');assert.equal(docs.status,200);
   await evaluate(`(() => {const f=document.getElementById('user-create-form');f.elements.display_name.value='Smoke Reader';f.elements.email.value='smoke-reader@example.test';f.elements.password.value='smoke reader password';f.elements.role.value='lector';f.requestSubmit();})()`);
   await wait(`document.getElementById('user-list').textContent.includes('smoke-reader@example.test')`);
   await evaluate(`document.getElementById('logout-button').click()`);
-  await wait(`document.getElementById('login-view').hidden === false`);
+  await wait(`document.getElementById('login-view')?.hidden === false`);
   await evaluate(`(() => {const f=document.getElementById('login-form');f.elements.email.value='smoke-reader@example.test';f.elements.password.value='smoke reader password';f.requestSubmit();})()`);
   try {
     await wait(`document.getElementById('account-name').textContent.includes('Lector') && document.querySelectorAll('#incident-list .incident').length === 1`);
@@ -144,7 +161,9 @@ async function poll(fn) {
   await evaluate(`document.querySelector('#incident-list .incident-title').click()`);
   await wait(`document.getElementById('detail-content').hidden === false`);
   assert.equal(await evaluate(`document.getElementById('status-form').hidden && document.getElementById('note-form').hidden`),true);
-  console.log('OK: login/logout, administración de usuarios, lector, incidentes, activos, historial, notas, filtros, XSS, fechas locales, errores de red, /docs y anchos 1280/390.');
+  await wait(`document.querySelectorAll('#affected-list li').length === 1`);
+  assert.equal(await evaluate(`document.getElementById('affected-form').hidden && !document.querySelector('#affected-list button')`),true);
+  console.log('OK: login/logout, administración de usuarios, lector, incidentes, activos, vínculos, historial, notas, filtros, XSS, fechas locales, errores de red, /docs y anchos 1280/390.');
   await command('Browser.close');
 })().catch(error => { console.error(error);process.exitCode=1; }).finally(async () => {
   if(socket && socket.readyState===WebSocket.OPEN) {
