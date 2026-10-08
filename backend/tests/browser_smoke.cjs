@@ -50,6 +50,9 @@ async function poll(fn) {
   }
   const wait = expression => poll(() => evaluate(expression));
   await command('Page.enable');
+  const downloads = path.join(profile, 'downloads');
+  fs.mkdirSync(downloads);
+  await command('Browser.setDownloadBehavior', {behavior:'allow', downloadPath:downloads});
   await command('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
   await command('Emulation.setTimezoneOverride',{timezoneId:'America/Argentina/Buenos_Aires'});
   await command('Page.navigate',{url:base});
@@ -501,6 +504,48 @@ async function poll(fn) {
   await command('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
   assert.equal(await evaluate(`document.documentElement.scrollWidth <= 390 && document.getElementById('audit-view').getBoundingClientRect().width <= 390`),true);
   await command('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
+  // Real downloads via the authenticated UI, including delayed/repeated clicks.
+  await evaluate(`document.getElementById('management-nav').click();document.getElementById('back-button').click();document.getElementById('asset-back-button').click();document.getElementById('risk-back-button').click();document.getElementById('control-back-button').click()`);
+  for (const [kind, resource] of [['incident','incidents'],['asset','assets'],['risk','risks'],['control','controls']]) {
+    await wait(`!document.getElementById('${kind}-export-button').hidden`);
+    await evaluate(`(() => {window.exportCalls=0;window.fetch=(...args)=>{if(String(args[0]).startsWith('/reports/')){window.exportCalls++;window.exportPath=args[0];return new Promise(resolve=>{window.releaseExport=()=>resolve(window.originalFetch(...args))})}return window.originalFetch(...args)};document.getElementById('${kind}-export-button').click();document.getElementById('${kind}-export-button').dispatchEvent(new Event('click'));})()`);
+    await wait(`document.getElementById('${kind}-export-button').disabled && document.getElementById('${kind}-export-feedback').textContent.includes('Preparando')`);
+    assert.equal(await evaluate(`window.exportCalls`),1);
+    await evaluate(`window.fetch=window.originalFetch;window.releaseExport()`);
+    await wait(`!document.getElementById('${kind}-export-button').disabled && document.getElementById('${kind}-export-feedback').textContent.includes('Descarga iniciada')`);
+    const file=path.join(downloads,`securityops-${resource}.csv`);
+    await poll(()=>fs.existsSync(file) && !fs.existsSync(file+'.crdownload'));
+    const bytes=fs.readFileSync(file);
+    assert.deepEqual([...bytes.subarray(0,3)],[239,187,191]);
+    assert.ok(bytes.toString('utf8').startsWith('\uFEFFID;'));
+    assert.ok(bytes.toString('utf8').includes('\r\n'));
+    assert.ok(!bytes.toString('utf8').includes('Higher manual estimate'));
+  }
+  await evaluate(`window.fetch=async()=>{throw new TypeError('offline')};document.getElementById('asset-export-button').click()`);
+  await wait(`document.getElementById('asset-export-feedback').textContent.includes('reintentar') && !document.getElementById('asset-export-button').disabled`);
+  await evaluate(`window.fetch=async()=>new Response(JSON.stringify({detail:'Forbidden'}),{status:403,headers:{'Content-Type':'application/json'}});document.getElementById('asset-export-button').click()`);
+  await wait(`document.getElementById('asset-export-feedback').textContent.includes('permiso')`);
+  await evaluate(`window.fetch=async()=>new Response(JSON.stringify({detail:'Invalid filters'}),{status:422,headers:{'Content-Type':'application/json'}});document.getElementById('asset-export-button').click()`);
+  await wait(`document.getElementById('asset-export-feedback').textContent.includes('filtros') && !document.getElementById('asset-export-button').disabled`);
+  fs.unlinkSync(path.join(downloads,'securityops-assets.csv'));
+  await evaluate(`window.fetch=window.originalFetch;document.getElementById('asset-export-button').click()`);
+  await wait(`document.getElementById('asset-export-feedback').textContent.includes('Descarga iniciada') && !document.getElementById('asset-export-button').disabled`);
+  await poll(()=>fs.existsSync(path.join(downloads,'securityops-assets.csv')));
+  // Applied filters are retained even if form fields have unsubmitted edits.
+  await evaluate(`document.getElementById('filter-form').elements.status.value='resolved';document.getElementById('filter-form').requestSubmit()`);
+  await wait(`document.querySelectorAll('#incident-list .incident').length === 0`);
+  fs.unlinkSync(path.join(downloads,'securityops-incidents.csv'));
+  await evaluate(`document.getElementById('filter-form').elements.status.value='open';window.fetch=(...args)=>{if(String(args[0]).startsWith('/reports/'))window.exportPath=args[0];return window.originalFetch(...args)};document.getElementById('incident-export-button').click()`);
+  await wait(`document.getElementById('incident-export-feedback').textContent.includes('Descarga iniciada') && !document.getElementById('incident-export-button').disabled`);
+  assert.ok((await evaluate(`window.exportPath`)).includes('status=resolved'));
+  await poll(()=>fs.existsSync(path.join(downloads,'securityops-incidents.csv')));
+  assert.equal(fs.readFileSync(path.join(downloads,'securityops-incidents.csv'),'utf8').split('\r\n').length,2);
+  await evaluate(`window.fetch=window.originalFetch;document.getElementById('clear-filters').click()`);
+  await wait(`document.querySelectorAll('#incident-list .incident').length === 1`);
+  await command('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+  assert.equal(await evaluate(`document.documentElement.scrollWidth <= 390 && ['incident','asset','risk','control'].every(kind=>document.getElementById(kind+'-export-button').getBoundingClientRect().right<=390)`),true);
+  await command('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
+  console.log('OK: descargas CSV reales de cuatro módulos, BOM, filtros aplicados, vacío, permisos, error/reintento, clics repetidos y móvil.');
   await evaluate(`document.getElementById('logout-button').click()`);
   await wait(`document.getElementById('login-view')?.hidden === false`);
   await evaluate(`(() => {const f=document.getElementById('login-form');f.elements.email.value='smoke-reader@example.test';f.elements.password.value='smoke reader password';f.requestSubmit();})()`);
@@ -520,6 +565,7 @@ async function poll(fn) {
   assert.equal(await evaluate(`document.getElementById('management-view').hidden && !document.getElementById('dashboard-view').textContent.includes('Test Administrator') && !document.getElementById('dashboard-view').textContent.includes('Auditoría')`),true);
   await evaluate(`document.getElementById('management-nav').click()`);
   assert.equal(await evaluate(`document.getElementById('new-button').hidden && document.getElementById('users-view').hidden`),true);
+  assert.equal(await evaluate(`['incident','asset','risk','control'].every(kind=>document.getElementById(kind+'-export-button').hidden)`),true);
   assert.equal(await evaluate(`document.getElementById('audit-view').hidden && document.getElementById('audit-list').children.length === 0`),true);
   await wait(`document.querySelectorAll('#asset-list .asset').length === 1`);
   assert.equal(await evaluate(`document.getElementById('new-asset-button').hidden && document.getElementById('asset-create-panel').hidden`),true);

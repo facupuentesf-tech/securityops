@@ -160,8 +160,18 @@ Each incident should have:
 
 Description, severity, status, date and optional responsible-person assignment
 are implemented, together with local business/user audit logs. Authentication audit events,
-reports, further dashboard metrics and security documentation management also remain future
+PDF/native Excel exports, further dashboard metrics and security documentation management also remain future
 work. Multi-organization isolation is implemented; shared deployment is not.
+
+CSV exports of incidents, assets, risks and controls are available to administrators
+and analysts; readers receive 403. They include all matching results using the
+existing list filters, scoped to the session organization. The responsive UI
+exports the applied filters with download/error feedback and repeated-click
+protection. UTF-8 BOM/semicolon CSV uses Spanish headings and category values,
+ISO UTC dates, correct escaping and spreadsheet formula neutralization. Related
+assets and latest residual evaluations do not duplicate resource rows. Sensitive
+administrative data, audit, notes and residual justifications are excluded.
+See [reports.md](reports.md) for the contract and manual checks.
 
 ## Incident-asset links (implemented)
 

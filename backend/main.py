@@ -1,5 +1,7 @@
 import argparse
 import base64
+import csv
+import io
 import hashlib
 import hmac
 import json
@@ -8,6 +10,7 @@ import re
 import secrets
 import sqlite3
 import sys
+import unicodedata
 from contextlib import asynccontextmanager, closing
 from datetime import datetime, timezone
 from getpass import fallback_getpass, getpass
@@ -556,6 +559,167 @@ def logout(request: Request, response: Response, user: dict = Depends(require_us
     return {"status": "ok"}
 
 
+def filtered_resources(connection, resource, organization_id, **filters):
+    select, alias = {
+        "incidents": (INCIDENT_SELECT, "i."), "risks": (RISK_SELECT, "r."),
+        "assets": ("SELECT * FROM assets ", ""),
+        "controls": ("SELECT * FROM security_controls ", ""),
+    }[resource]
+    conditions = [alias + "organization_id = ?"]
+    parameters = [organization_id]
+    if resource == "risks":
+        require_risk_asset(connection, filters.get("asset_id"), organization_id)
+    if "assignee_id" in filters:
+        require_assignee(connection, filters["assignee_id"], organization_id)
+    for field, value in filters.items():
+        if value is None:
+            continue
+        if field == "level":
+            conditions.append("r.probability * r.impact BETWEEN ? AND ?")
+            parameters.extend(RISK_LEVEL_RANGES[value])
+        else:
+            # Fields come from the fixed endpoint signatures, never client keys.
+            conditions.append(alias + field + " = ?")
+            parameters.append(value)
+    return connection.execute(select + "WHERE " + " AND ".join(conditions) + " ORDER BY " + alias + "id",
+                              parameters).fetchall()
+
+
+CSV_LABELS = {
+    "status": {"open": "Abierto", "investigating": "En investigación", "resolved": "Resuelto",
+               "identified": "Identificado", "treating": "En tratamiento", "accepted": "Aceptado",
+               "planned": "Planificado", "implemented": "Implementado", "retired": "Retirado"},
+    "severity": {"low": "Baja", "medium": "Media", "high": "Alta", "critical": "Crítica"},
+    "level": {"low": "Bajo", "medium": "Medio", "high": "Alto", "critical": "Crítico"},
+    "type": {"hardware": "Hardware", "software": "Software", "service": "Servicio", "data": "Datos",
+             "preventive": "Preventivo", "detective": "Detectivo", "corrective": "Correctivo"},
+}
+CSV_HEADERS = {
+    "incidents": ["ID", "Título", "Descripción", "Severidad", "Estado", "Fecha de creación (UTC)",
+                  "Responsable (ID)", "Responsable", "Activos afectados (IDs)", "Activos afectados"],
+    "assets": ["ID", "Nombre", "Descripción", "Tipo", "Criticidad", "Fecha de creación (UTC)"],
+    "risks": ["ID", "Título", "Descripción", "Probabilidad original", "Impacto original", "Puntaje original",
+              "Nivel original", "Estado", "Activo (ID)", "Activo", "Responsable (ID)", "Responsable",
+              "Fecha de creación (UTC)", "Última evaluación residual (ID)", "Probabilidad residual",
+              "Impacto residual", "Puntaje residual", "Nivel residual", "Fecha de evaluación residual (UTC)"],
+    "controls": ["ID", "Nombre", "Descripción", "Tipo", "Estado", "Fecha de creación (UTC)"],
+}
+
+
+def csv_safe(value):
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        return value
+    # Inspect past whitespace and Unicode controls/formats (including zero-width
+    # characters). Preserve the original text and neutralize with an apostrophe.
+    prefix_control = False
+    index = 0
+    while index < len(value) and (value[index].isspace() or unicodedata.category(value[index]).startswith("C")):
+        prefix_control |= unicodedata.category(value[index]).startswith("C")
+        index += 1
+    if prefix_control or (index < len(value) and value[index] in "=+-@"):
+        return "'" + value
+    return value
+
+
+def csv_date(value):
+    timestamp = datetime.fromisoformat(value)
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.astimezone(timezone.utc).isoformat()
+
+
+def export_csv(resource, user, **filters):
+    organization_id = user["organization_id"]
+    with closing(connect()) as connection, connection:
+        connection.execute("BEGIN")
+        rows = filtered_resources(connection, resource, organization_id, **filters)
+        affected = {}
+        residuals = {}
+        if resource == "incidents":
+            for link in connection.execute(
+                "SELECT ia.incident_id, a.id, a.name FROM incident_assets ia JOIN assets a "
+                "ON a.id = ia.asset_id AND a.organization_id = ia.organization_id "
+                "WHERE ia.organization_id = ? ORDER BY ia.incident_id, a.id", (organization_id,),
+            ):
+                affected.setdefault(link["incident_id"], []).append(link)
+        if resource == "risks":
+            for assessment in connection.execute(
+                "SELECT a.id, a.risk_id, a.residual_probability, a.residual_impact, a.created_at "
+                "FROM risk_assessments a WHERE a.organization_id = ? AND a.id = ("
+                "SELECT latest.id FROM risk_assessments latest WHERE latest.organization_id = a.organization_id "
+                "AND latest.risk_id = a.risk_id ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1)",
+                (organization_id,),
+            ):
+                residuals[assessment["risk_id"]] = assessment
+        output = io.StringIO(newline="")
+        writer = csv.writer(output, delimiter=";", lineterminator="\r\n")
+        writer.writerow(CSV_HEADERS[resource])
+        for row in rows:
+            created_at = csv_date(row["created_at"])
+            if resource == "assets":
+                values = [row["id"], row["name"], row["description"], CSV_LABELS["type"][row["type"]],
+                          CSV_LABELS["severity"][row["criticality"]], created_at]
+            elif resource == "controls":
+                values = [row["id"], row["name"], row["description"], CSV_LABELS["type"][row["type"]],
+                          CSV_LABELS["status"][row["status"]], created_at]
+            elif resource == "incidents":
+                links = affected.get(row["id"], [])
+                values = [row["id"], row["title"], row["description"], CSV_LABELS["severity"][row["severity"]],
+                          CSV_LABELS["status"][row["status"]], created_at, row["assignee_id"], row["assignee_name"],
+                          " | ".join(str(link["id"]) for link in links),
+                          " | ".join(csv_safe(link["name"]) for link in links)]
+            else:
+                score = row["probability"] * row["impact"]
+                values = [row["id"], row["title"], row["description"], row["probability"], row["impact"], score,
+                          CSV_LABELS["level"][risk_level(score)], CSV_LABELS["status"][row["status"]], row["asset_id"],
+                          row["asset_name"], row["assignee_id"], row["assignee_name"], created_at]
+                assessment = residuals.get(row["id"])
+                if assessment is None:
+                    values.extend([""] * 6)
+                else:
+                    residual_score = assessment["residual_probability"] * assessment["residual_impact"]
+                    values.extend([assessment["id"], assessment["residual_probability"], assessment["residual_impact"],
+                                   residual_score, CSV_LABELS["level"][risk_level(residual_score)], csv_date(assessment["created_at"])])
+            writer.writerow([csv_safe(value) for value in values])
+        content = output.getvalue().encode("utf-8-sig")
+    return Response(content=content, media_type="text/csv; charset=utf-8", headers={
+        "Content-Disposition": f'attachment; filename="securityops-{resource}.csv"',
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+    })
+
+
+@app.get("/reports/incidents.csv", response_class=Response)
+def report_incidents(status: Literal["open", "investigating", "resolved"] | None = None,
+                     severity: Literal["low", "medium", "high", "critical"] | None = None,
+                     assignee_id: Annotated[int | None, Query(gt=0)] = None,
+                     user: dict = Depends(require_roles("administrador", "analista"))):
+    return export_csv("incidents", user, status=status, severity=severity, assignee_id=assignee_id)
+
+
+@app.get("/reports/assets.csv", response_class=Response)
+def report_assets(type: Literal["hardware", "software", "service", "data"] | None = None,
+                  criticality: Literal["low", "medium", "high", "critical"] | None = None,
+                  user: dict = Depends(require_roles("administrador", "analista"))):
+    return export_csv("assets", user, type=type, criticality=criticality)
+
+
+@app.get("/reports/risks.csv", response_class=Response)
+def report_risks(status: RiskStatus | None = None, level: RiskLevel | None = None,
+                 asset_id: Annotated[int | None, Query(gt=0)] = None,
+                 assignee_id: Annotated[int | None, Query(gt=0)] = None,
+                 user: dict = Depends(require_roles("administrador", "analista"))):
+    return export_csv("risks", user, status=status, level=level, asset_id=asset_id, assignee_id=assignee_id)
+
+
+@app.get("/reports/controls.csv", response_class=Response)
+def report_controls(type: Literal["preventive", "detective", "corrective"] | None = None,
+                    status: Literal["planned", "implemented", "retired"] | None = None,
+                    user: dict = Depends(require_roles("administrador", "analista"))):
+    return export_csv("controls", user, type=type, status=status)
+
+
 @app.get("/dashboard")
 def dashboard(user: dict = Depends(require_user)):
     organization = (user["organization_id"],)
@@ -907,19 +1071,8 @@ def create_control(control: ControlCreate, user: dict = Depends(require_roles("a
 def list_controls(type: Literal["preventive", "detective", "corrective"] | None = None,
                   status: Literal["planned", "implemented", "retired"] | None = None,
                   user: dict = Depends(require_user)):
-    conditions = ["organization_id = ?"]
-    parameters = [user["organization_id"]]
-    if type is not None:
-        conditions.append("type = ?")
-        parameters.append(type)
-    if status is not None:
-        conditions.append("status = ?")
-        parameters.append(status)
     with closing(connect()) as connection:
-        rows = connection.execute(
-            "SELECT * FROM security_controls WHERE " + " AND ".join(conditions) + " ORDER BY id",
-            parameters,
-        ).fetchall()
+        rows = filtered_resources(connection, "controls", user["organization_id"], type=type, status=status)
     return [dict(row) for row in rows]
 
 
@@ -1059,25 +1212,8 @@ def list_risks(status: RiskStatus | None = None, level: RiskLevel | None = None,
                asset_id: Annotated[int | None, Query(gt=0)] = None,
                assignee_id: Annotated[int | None, Query(gt=0)] = None,
                user: dict = Depends(require_user)):
-    conditions = ["r.organization_id = ?"]
-    parameters = [user["organization_id"]]
-    if status is not None:
-        conditions.append("r.status = ?")
-        parameters.append(status)
-    if level is not None:
-        conditions.append("r.probability * r.impact BETWEEN ? AND ?")
-        parameters.extend(RISK_LEVEL_RANGES[level])
-    if asset_id is not None:
-        conditions.append("r.asset_id = ?")
-        parameters.append(asset_id)
-    if assignee_id is not None:
-        conditions.append("r.assignee_id = ?")
-        parameters.append(assignee_id)
     with closing(connect()) as connection:
-        require_risk_asset(connection, asset_id, user["organization_id"])
-        require_assignee(connection, assignee_id, user["organization_id"])
-        rows = connection.execute(RISK_SELECT + "WHERE " + " AND ".join(conditions) + " ORDER BY r.id",
-                                  parameters).fetchall()
+        rows = filtered_resources(connection, "risks", user["organization_id"], status=status, level=level, asset_id=asset_id, assignee_id=assignee_id)
     return [public_risk(row) for row in rows]
 
 
@@ -1118,19 +1254,8 @@ def list_assets(
     criticality: Literal["low", "medium", "high", "critical"] | None = None,
     user: dict = Depends(require_user),
 ):
-    conditions = ["organization_id = ?"]
-    parameters = [user["organization_id"]]
-    if type is not None:
-        conditions.append("type = ?")
-        parameters.append(type)
-    if criticality is not None:
-        conditions.append("criticality = ?")
-        parameters.append(criticality)
     with closing(connect()) as connection:
-        rows = connection.execute(
-            "SELECT * FROM assets WHERE " + " AND ".join(conditions) + " ORDER BY id",
-            parameters,
-        ).fetchall()
+        rows = filtered_resources(connection, "assets", user["organization_id"], type=type, criticality=criticality)
     return [dict(row) for row in rows]
 
 
@@ -1346,24 +1471,8 @@ def list_incidents(
     assignee_id: Annotated[int | None, Query(gt=0)] = None,
     user: dict = Depends(require_user),
 ):
-    conditions = ["i.organization_id = ?"]
-    parameters = [user["organization_id"]]
-    if status is not None:
-        conditions.append("i.status = ?")
-        parameters.append(status)
-    if severity is not None:
-        conditions.append("i.severity = ?")
-        parameters.append(severity)
-    if assignee_id is not None:
-        conditions.append("i.assignee_id = ?")
-        parameters.append(assignee_id)
-    query = INCIDENT_SELECT
-    if conditions:
-        query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY i.id"
     with closing(connect()) as connection:
-        require_assignee(connection, assignee_id, user["organization_id"])
-        rows = connection.execute(query, parameters).fetchall()
+        rows = filtered_resources(connection, "incidents", user["organization_id"], status=status, severity=severity, assignee_id=assignee_id)
     return [dict(row) for row in rows]
 
 

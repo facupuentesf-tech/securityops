@@ -67,6 +67,7 @@ compartido.
 | Vincular y desvincular activos de incidentes | Sí | Sí | No |
 | Gestionar usuarios (crear, editar, desactivar y restablecer contraseña) | Sí | No | No |
 | Consultar auditoría de la organización | Sí | No | No |
+| Exportar CSV de incidentes, activos, riesgos y controles | Sí | Sí | No |
 
 Los cambios existentes anteriores a las migraciones mantienen su contenido,
 pero no se les asigna un usuario retroactivamente. Las sesiones se guardan
@@ -422,7 +423,7 @@ locales y controles de creación ocultos para lectores.
 Prototipo funcional local con autenticación, permisos y aislamiento entre
 organizaciones, con creación, consulta y edición de activos, riesgos y controles. Eliminación de
 recursos, auditoría de autenticación,
-reportes y métricas adicionales continúan pendientes. El resumen inicial está implementado.
+PDF, Excel nativo y métricas adicionales continúan pendientes. El resumen inicial y las exportaciones CSV están implementados.
 
 ## Activos afectados por incidente
 
@@ -787,3 +788,27 @@ La interfaz muestra evaluador histórico, fechas locales, diferencias en puntos,
 mensajes de carga/error/reintento y texto seguro. Sin registros muestra
 “Sin evaluación residual”. Contrato, migración, pruebas y pasos manuales:
 [docs/risk-assessments.md](docs/risk-assessments.md).
+
+## Exportaciones CSV
+
+Administradores y analistas pueden descargar **Exportar CSV** desde cada listado
+de Gestión. Se incluyen todos los resultados de los filtros aplicados; los
+lectores no ven el botón y reciben `403` en la API. Endpoints:
+`GET /reports/incidents.csv`, `/reports/assets.csv`, `/reports/risks.csv` y
+`/reports/controls.csv`. Filtros y validaciones coinciden con los listados JSON,
+que conservan sus respuestas actuales. La organización proviene de la sesión.
+
+Los CSV usan UTF-8 con BOM, separador `;`, columnas/categorías en español,
+IDs y fechas ISO 8601 UTC. Incluyen responsables y activos afectados en
+incidentes, y valores originales/última residual en riesgos, sin duplicar filas.
+No contienen credenciales, sesiones, administración de usuarios, auditoría,
+notas ni justificaciones residuales. Los textos que podrían iniciar fórmulas,
+incluso precedidos por espacios o controles, reciben un apóstrofo inicial.
+
+Cada descarga usa una instantánea consistente, nombres controlados y
+`Cache-Control: no-store`; se genera en memoria sin archivos en el servidor ni
+truncamiento de resultados. La interfaz muestra progreso, bloquea clics
+repetidos y permite reintentar errores. Sin coincidencias se descargan solo
+encabezados. No requiere migración. PDF, Excel nativo y auditoría de descargas
+quedan pendientes. Contrato, columnas, protección y comprobación manual:
+[docs/reports.md](docs/reports.md).

@@ -17,3 +17,5 @@
 .edit-panel{border-top:1px solid var(--border);padding-top:18px;margin:18px 0}.edit-fields{display:grid;gap:18px;grid-template-columns:repeat(2,minmax(0,1fr))}.edit-actions{display:flex;gap:12px;flex-wrap:wrap}@media(max-width:760px){.edit-fields{grid-template-columns:1fr}}
 
 .assessment-section{border-top:1px solid var(--border);margin-top:24px;padding-top:24px}.assessment-section article{overflow-wrap:anywhere}.assessment-section details{margin-top:24px}.assessment-section summary{cursor:pointer;font-weight:600}#assessment-form{margin-top:24px}
+
+.export-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:18px}.export-actions p{flex:1;min-width:160px;margin:0}

@@ -148,8 +148,16 @@ database, including authentication, permissions, migration of legacy data,
 incident and asset workflows, tenant isolation and persistence. An optional Node.js/Chrome smoke
 test exercises the authenticated interface at desktop and mobile widths.
 
-Asset deletion, risk/control extensions, authentication audit events, reports and further dashboard metrics remain
+Asset deletion, risk/control extensions, authentication audit events, PDF/native Excel exports and further dashboard metrics remain
 future work. React, PostgreSQL and Docker are possible later choices.
+
+CSV exports are implemented at `GET /reports/{incidents,assets,risks,controls}.csv`
+for administrators and analysts. List filters share the same query construction
+and validation as JSON lists. One SQLite read transaction covers the resources,
+scoped joins and latest residual assessments. CSV generation uses Python's CSV
+writer in memory, UTF-8 BOM, semicolons, controlled attachment names and no-store.
+Text cells are neutralized against spreadsheet formulas; no download audit event
+is generated. See [reports.md](reports.md) for columns, protection and verification.
 
 ## Incident-asset links (implemented)
 

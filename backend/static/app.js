@@ -1,5 +1,6 @@
 "use strict";
 const editors = Object.fromEntries(["asset", "risk", "control"].map(kind => [kind, {version: 0, resource: null, saving: false, loading: false}]));
+const exportStates = Object.fromEntries(["incident", "asset", "risk", "control"].map(kind => [kind, {version: 0, busy: false, filters: new URLSearchParams()}]));
 let assessmentVersion = 0;
 let assessmentSaving = false;
 let dashboardVersion = 0;
@@ -57,6 +58,7 @@ function message(text, error = false) {
   $("message").hidden = !text;
 }
 function showLogin() {
+  for (const kind of Object.keys(exportStates)) resetExport(kind);
   resetAssessments();
   for (const kind of Object.keys(editors)) resetEditor(kind);
   ++dashboardVersion;
@@ -133,6 +135,7 @@ function showApplication(session) {
   $("account").hidden = false;
   $("account-name").textContent = `${currentUser.display_name} · ${roles[currentUser.role]}`;
   const canWrite = currentUser.role !== "lector";
+  for (const kind of Object.keys(exportStates)) { resetExport(kind); $(kind + "-export-button").hidden = !canWrite; }
   resetAssessments();
   for (const kind of Object.keys(editors)) resetEditor(kind);
   if (currentUser.role !== "administrador") {
@@ -160,7 +163,7 @@ function showApplication(session) {
   if (currentUser.role === "administrador") { loadUsers(); loadAudit(); }
   showSection("summary", false);
 }
-async function api(path, method = "GET", body) {
+async function apiResponse(path, method = "GET", body) {
   let response;
   try {
     const headers = body === undefined ? {} : {"Content-Type": "application/json"};
@@ -186,9 +189,14 @@ async function api(path, method = "GET", body) {
     if (response.status === 403) throw new Error("Tu rol no tiene permiso para realizar esta operación.");
     if (response.status === 404) throw new Error("No se encontró el registro solicitado.");
     if (response.status === 409) throw new Error("La operación no se puede completar por un conflicto con los datos.");
+    if (response.status === 422 && path.startsWith("/reports/")) throw new Error("Revisá los filtros: usá las categorías disponibles e IDs válidos.");
     if (response.status === 422) throw new Error("Revisá los campos: completá los textos y usá valores válidos. Las notas admiten entre 1 y 5000 caracteres.");
     throw new Error("El servidor no pudo completar la operación. Volvé a intentar.");
   }
+  return response;
+}
+async function api(path, method = "GET", body) {
+  const response = await apiResponse(path, method, body);
   return response.status === 204 ? null : response.json();
 }
 function busy(form, value, text) {
@@ -204,6 +212,7 @@ async function loadList() {
   $("list-feedback").textContent = "Cargando incidentes…";
   const query = new URLSearchParams();
   for (const [key, value] of new FormData($("filter-form"))) if (value) query.set(key, value);
+  exportStates.incident.filters = new URLSearchParams(query);
   try {
     const incidents = await api(`/incidents${query.size ? "?" + query : ""}`);
     if (version !== listVersion) return;
@@ -483,6 +492,7 @@ async function loadAssets() {
   $("asset-list-feedback").textContent = "Cargando activos…";
   const query = new URLSearchParams();
   for (const [key, value] of new FormData($("asset-filter-form"))) if (value) query.set(key, value);
+  exportStates.asset.filters = new URLSearchParams(query);
   try {
     const assets = await api(`/assets${query.size ? "?" + query : ""}`);
     if (version !== assetListVersion) return;
@@ -693,6 +703,7 @@ async function loadRisks() {
   $("risk-list-feedback").textContent = "Cargando riesgos…";
   const query = new URLSearchParams();
   for (const [key, value] of new FormData($("risk-filter-form"))) if (value) query.set(key, value);
+  exportStates.risk.filters = new URLSearchParams(query);
   try {
     const risks = await api(`/risks${query.size ? "?" + query : ""}`);
     if (version !== riskListVersion || !currentUser) return;
@@ -808,6 +819,7 @@ async function loadControls() {
   $("control-list-feedback").textContent = "Cargando controles…";
   const query = new URLSearchParams();
   for (const [key, value] of new FormData($("control-filter-form"))) if (value) query.set(key, value);
+  exportStates.control.filters = new URLSearchParams(query);
   try {
     const controls = await api(`/controls${query.size ? "?" + query : ""}`);
     if (version !== controlListVersion || !currentUser) return;
@@ -1430,4 +1442,41 @@ $("assessment-form").addEventListener("submit", async event => {
     if (assessmentActive(id, version)) { assessmentSaving = false; busy(form, false); }
   }
 });
+
+
+function resetExport(kind) {
+  const state = exportStates[kind]; ++state.version; state.busy = false;
+  state.filters = new URLSearchParams();
+  $(kind + "-export-button").disabled = false; $(kind + "-export-button").hidden = true;
+  $(kind + "-export-button").textContent = "Exportar CSV";
+  $(kind + "-export-feedback").textContent = "";
+}
+async function downloadCsv(kind) {
+  const state = exportStates[kind];
+  if (state.busy || !currentUser || currentUser.role === "lector") return;
+  const version = ++state.version;
+  const resource = {incident: "incidents", asset: "assets", risk: "risks", control: "controls"}[kind];
+  const filters = new URLSearchParams(state.filters);
+  state.busy = true; $(kind + "-export-button").disabled = true;
+  $(kind + "-export-button").textContent = "Descargando…";
+  $(kind + "-export-feedback").textContent = "Preparando todos los resultados coincidentes…";
+  try {
+    const response = await apiResponse(`/reports/${resource}.csv${filters.size ? "?" + filters : ""}`);
+    const blob = await response.blob();
+    if (version !== state.version || !currentUser || currentUser.role === "lector") return;
+    const url = URL.createObjectURL(blob);
+    try {
+      const link = element("a"); link.href = url; link.download = `securityops-${resource}.csv`;
+      document.body.append(link); link.click(); link.remove();
+    } finally { setTimeout(() => URL.revokeObjectURL(url), 1000); }
+    $(kind + "-export-feedback").textContent = "Descarga iniciada. Se incluyeron todos los resultados coincidentes con los filtros activos.";
+  } catch (error) {
+    if (version === state.version && currentUser) $(kind + "-export-feedback").textContent = error.message + " Volvé a pulsar Exportar CSV para reintentar.";
+  } finally {
+    if (version === state.version) {
+      state.busy = false; $(kind + "-export-button").disabled = false; $(kind + "-export-button").textContent = "Exportar CSV";
+    }
+  }
+}
+for (const kind of Object.keys(exportStates)) $(kind + "-export-button").addEventListener("click", () => downloadCsv(kind));
 start();
