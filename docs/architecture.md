@@ -23,6 +23,7 @@ FastAPI (backend/main.py)
        |-- /static: CSS and JavaScript
        |-- /docs: API schema
        |-- /auth: login, session and logout
+       |-- /audit-logs: administrator-only organization audit queries
        |-- /users: administrator-only management
        |-- /incidents: role-protected operations
        |-- /assets: organization-scoped creation and queries
@@ -33,6 +34,7 @@ SQLite database (default: backend/securityops.db)
        |-- organizations, users, sessions
        |-- incidents, incident_status_history, incident_notes
        |-- assets
+       |-- audit_logs
        |-- schema_migrations
 ```
 
@@ -135,7 +137,7 @@ Migration 004 adds assets and indexes without changing existing tables or data.
 
 This release supports isolated organization records but still binds to
 `127.0.0.1`. It does not provide shared deployment configuration, rate limiting
-or a general audit log. It is not safe to expose this local prototype to an
+or authentication audit events. It is not safe to expose this local prototype to an
 untrusted network.
 
 ## Verification and Future Work
@@ -145,7 +147,7 @@ database, including authentication, permissions, migration of legacy data,
 incident and asset workflows, tenant isolation and persistence. An optional Node.js/Chrome smoke
 test exercises the authenticated interface at desktop and mobile widths.
 
-Asset editing and deletion, risk/control extensions, general audit logs, reports and dashboards remain
+Asset editing and deletion, risk/control extensions, authentication audit events, reports and dashboards remain
 future work. React, PostgreSQL and Docker are possible later choices.
 
 ## Incident-asset links (implemented)
@@ -243,8 +245,8 @@ Migration 008 adds nullable foreign keys and database triggers enforcing same-te
 eligible assignees on insert/update and guarding user organization changes. A user
 deactivation or change to reader clears both resource collections through a trigger
 within the existing user-update transaction. Failures roll back the user and all
-cleanup; reactivation does not reconstruct assignments. No notifications, messages
-or general audit records are generated.
+cleanup; reactivation does not reconstruct assignments. No notifications or messages are generated. Migration 009 now records these
+API changes and automatic removals in local audit logs.
 
 The UI loads only the minimal candidate endpoint for selectors and filters, shows
 read-only assignment information to non-administrators and safely renders names.
@@ -252,3 +254,19 @@ Request versions discard stale responses. User management refreshes visible
 assignments and candidates after eligibility changes. Tests inject a failure into
 risk cleanup after incident cleanup to verify complete rollback, in addition to
 API validation, isolation, persistence and browser desktop/mobile flows.
+
+
+## Local audit logs (migration 009)
+
+Business and user-administration API operations now insert organization-scoped
+local audit events in the same transaction, including automatic assignment
+removals. Insert failure rolls back the full change; failed requests and no-op
+changes produce no events. Actor ID/name snapshots preserve historical identity;
+explicit detail allowlists exclude credentials, secrets and free resource text.
+Administrator-only `GET /audit-logs` provides AND filters and bounded pagination
+ordered by UTC timestamp/ID descending. The responsive Spanish UI renders safe
+text and local dates with loading/error/empty feedback. Migration 009 preserves
+all existing data and never reconstructs past events. Authentication events are
+deferred. This local audit does not resist modification by someone with direct
+SQLite access. See [audit.md](audit.md) for the event contract, query validation,
+transaction guarantees, tests and manual verification steps.

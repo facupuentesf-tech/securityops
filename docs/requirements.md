@@ -112,7 +112,7 @@ and backend-enforced role-based permissions.
 
 ## Original Requirements: Future Work
 
-Asset extensions, risk/control extensions, general audit logs and shared deployment remain
+Asset extensions, risk/control extensions, authentication audit events and shared deployment remain
 future work. Multi-organization data isolation is implemented, but this remains
 a local prototype bound to `127.0.0.1` and is not intended for shared deployment.
 
@@ -159,7 +159,7 @@ Each incident should have:
 - Date
 
 Description, severity, status, date and optional responsible-person assignment
-are implemented. General audit logs,
+are implemented, together with local business/user audit logs. Authentication audit events,
 reports, dashboards and security documentation management also remain future
 work. Multi-organization isolation is implemented; shared deployment is not.
 
@@ -264,4 +264,20 @@ preservation and restart persistence; Chrome smoke checks cover the interface.
 - The responsive Spanish detail UI shows the assignee or “Sin asignar”, offers
   administrator-only selectors/actions, uses minimal candidates for filters, safely
   renders names and shows loading/error/empty feedback with retries.
-- No notifications/messages or general audit module are included.
+- No notifications/messages are included. Local audit events are implemented by migration 009.
+
+
+## Local audit logs (migration 009)
+
+Business and user-administration API operations now insert organization-scoped
+local audit events in the same transaction, including automatic assignment
+removals. Insert failure rolls back the full change; failed requests and no-op
+changes produce no events. Actor ID/name snapshots preserve historical identity;
+explicit detail allowlists exclude credentials, secrets and free resource text.
+Administrator-only `GET /audit-logs` provides AND filters and bounded pagination
+ordered by UTC timestamp/ID descending. The responsive Spanish UI renders safe
+text and local dates with loading/error/empty feedback. Migration 009 preserves
+all existing data and never reconstructs past events. Authentication events are
+deferred. This local audit does not resist modification by someone with direct
+SQLite access. See [audit.md](audit.md) for the event contract, query validation,
+transaction guarantees, tests and manual verification steps.

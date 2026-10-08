@@ -128,6 +128,20 @@
       </section>
       <section id="control-detail-panel" class="panel" hidden><button id="control-back-button" type="button" class="text-button">← Volver a controles</button><p id="control-detail-feedback" class="empty" role="status"></p><div id="control-detail-content" hidden><p id="control-detail-id" class="eyebrow"></p><h1 id="control-detail-name" tabindex="-1"></h1><p id="control-detail-description" class="user-text"></p><span id="control-detail-type" class="badge"></span><p id="control-detail-status"></p><p id="control-detail-date" class="muted"></p></div></section>
     </section>
+    <section id="audit-view" class="panel" aria-labelledby="audit-heading" hidden>
+      <div class="section-heading"><h2 id="audit-heading">Auditoría</h2><button id="reload-audit" type="button" class="secondary">Actualizar</button></div>
+      <p class="muted">Cambios de negocio y administración de usuarios. Registro local de esta organización.</p>
+      <form id="audit-filter-form" class="filters">
+        <label>Actor (ID)<input name="actor_id" type="number" min="1" step="1"></label>
+        <label>Acción<select name="action"><option value="">Todas las acciones</option></select></label>
+        <label>Recurso<select name="resource_type"><option value="">Todos los recursos</option></select></label>
+        <label>Desde (fecha local)<input name="date_from" type="datetime-local" step="1"></label>
+        <label>Hasta (fecha local)<input name="date_to" type="datetime-local" step="1"></label>
+        <button type="submit" class="secondary">Aplicar filtros</button><button id="clear-audit-filters" type="button" class="text-button">Limpiar</button>
+      </form>
+      <p id="audit-feedback" class="empty" role="status"></p><ol id="audit-list" class="notes"></ol>
+      <div class="audit-pagination"><button id="audit-previous" type="button" class="secondary">Anterior</button><span id="audit-page" aria-live="polite"></span><button id="audit-next" type="button" class="secondary">Siguiente</button></div>
+    </section>
     <section id="users-view" class="panel" aria-labelledby="users-heading" hidden>
       <div class="section-heading"><div><h2 id="users-heading">Usuarios</h2><p class="muted">Creá cuentas y asigná un rol. Desactivar una cuenta revoca su acceso.</p></div><button id="reload-users" class="secondary" type="button">Actualizar</button></div>
       <form id="user-create-form">

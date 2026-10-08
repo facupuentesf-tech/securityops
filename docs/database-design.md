@@ -6,7 +6,7 @@ The local version uses SQLite, by default at `backend/securityops.db`. The
 default path is relative to the backend module and can be overridden with
 `SECURITYOPS_DATABASE`. Numbered SQL migrations in `backend/migrations` are
 tracked in `schema_migrations`; database files are excluded from Git.
-Migrations 001–008 preserve existing incident, history, note, user and session
+Migrations 001–009 preserve existing incident, history, note, user and session
 data while assigning existing users and incidents to the initial organization.
 
 ## Implemented Schema
@@ -153,7 +153,7 @@ browser's timezone. Incident, history, note and asset data survive server restar
 
 ## Domain entities still planned
 
-Asset editing and deletion, risk/control extensions and general audit logs remain future work.
+Asset editing and deletion, risk/control extensions and authentication audit events remain future work.
 Multi-organization isolation is implemented for the current asset, incident and user
 operations. Incident links use `incident_assets`; responsible users use `assignee_id`.
 PostgreSQL remains a possible
@@ -165,7 +165,7 @@ The planned entities are:
 - Assets (creation and queries implemented; extensions planned)
 - Risks
 - Security Controls
-- Audit Logs
+- Audit Logs (implemented by migration 009)
 
 ### Asset extensions
 
@@ -219,20 +219,12 @@ Main fields:
 - assignee_id (implemented, nullable)
 - created_at
 
-### Audit Logs
+### Audit Logs (implemented)
 
-Records important actions performed within the platform.
-
-Main fields:
-
-- id
-- organization_id
-- user_id
-- action
-- entity_type
-- entity_id
-- timestamp
-- ip_address
+Migration 009 implements `audit_logs`: `id`, `organization_id`, `actor_id`,
+`actor_name`, `action`, `resource_type`, `resource_id`, `occurred_at`, `details`.
+See the schema section below and [audit.md](audit.md) for the event contract.
+IP addresses and authentication events are not recorded in this stage.
 
 ## Incident-asset links (implemented)
 
@@ -332,3 +324,21 @@ update, the user and all assignment changes roll back. Clearing assignments neve
 deletes resources, notes, history or links, and later reactivation does not restore
 them. A referenced user cannot be deleted while assignments exist. Display names
 are obtained through organization-scoped joins, not duplicated in these tables.
+
+
+## Audit logs (migration 009)
+
+`audit_logs` adds an autoincrement `id`, organization foreign key, immutable
+historical `actor_id`/`actor_name` snapshots, fixed `action` and `resource_type`,
+positive `resource_id`, UTC ISO `occurred_at`, and JSON-object `details` checked
+by SQLite. Actor/resource IDs intentionally have no foreign keys to mutable
+accounts/resources, preserving history without cascades. Indexes on organization,
+date/ID and organization/actor/date/ID support scoped queries. This migration only
+creates the audit table and indexes; existing rows, relations and sequences are
+preserved and historical activity is not backfilled.
+
+API transactions insert events with explicit minimal detail keys; insert failure
+rolls back business changes, user changes, sessions and automatic removals.
+No API updates or deletes audit entries. These are local records, without tamper
+resistance against direct SQLite access. See [audit.md](audit.md) for the event
+catalog, permissions, pagination, validation and verification.

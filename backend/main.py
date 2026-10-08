@@ -2,6 +2,7 @@ import argparse
 import base64
 import hashlib
 import hmac
+import json
 import os
 import re
 import secrets
@@ -78,6 +79,36 @@ def migrate_database() -> None:
                 if connection.in_transaction:
                     connection.rollback()
                 raise
+
+
+AuditAction = Literal["created", "status_changed", "note_created", "linked", "unlinked",
+                      "assignee_changed", "role_changed", "deactivated", "reactivated",
+                      "password_reset", "user_updated"]
+AuditResource = Literal["incident", "asset", "risk", "control", "user"]
+# Each event has an explicit allowlist; free text and credentials are never details.
+AUDIT_DETAIL_KEYS = {
+    "created": {"asset_id"}, "status_changed": {"previous_status", "new_status"},
+    "note_created": {"note_id"}, "linked": {"asset_id", "control_id"},
+    "unlinked": {"asset_id", "control_id"},
+    "assignee_changed": {"previous_assignee_id", "new_assignee_id", "automatic", "user_id"},
+    "role_changed": {"previous_role", "new_role"},
+    "deactivated": {"previous_is_active", "new_is_active"},
+    "reactivated": {"previous_is_active", "new_is_active"},
+    "password_reset": set(), "user_updated": {"display_name_changed", "email_changed"},
+}
+
+
+def record_audit(connection, actor, action, resource_type, resource_id, **details):
+    if action not in AUDIT_DETAIL_KEYS or set(details) - AUDIT_DETAIL_KEYS[action]:
+        raise ValueError("Unsupported audit details")
+    # Only identifiers, fixed enumerations and flags supplied by these call sites.
+    connection.execute(
+        "INSERT INTO audit_logs (organization_id, actor_id, actor_name, action, "
+        "resource_type, resource_id, occurred_at, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (actor["organization_id"], actor["id"], actor["display_name"], action,
+         resource_type, resource_id, datetime.now(timezone.utc).isoformat(),
+         json.dumps(details, ensure_ascii=False, sort_keys=True)),
+    )
 
 
 def hash_password(password: str) -> str:
@@ -452,6 +483,44 @@ def logout(request: Request, response: Response, user: dict = Depends(require_us
     return {"status": "ok"}
 
 
+@app.get("/audit-logs")
+def list_audit_logs(
+    actor_id: Annotated[int | None, Query(gt=0)] = None,
+    action: AuditAction | None = None,
+    resource_type: AuditResource | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    page: Annotated[int, Query(ge=1, le=1000000)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 25,
+    actor: dict = Depends(require_roles("administrador")),
+):
+    for value in (date_from, date_to):
+        if value is not None and value.utcoffset() is None:
+            raise HTTPException(status_code=422, detail="Audit dates must include a timezone")
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise HTTPException(status_code=422, detail="date_from must not exceed date_to")
+    conditions = ["organization_id = ?"]
+    parameters = [actor["organization_id"]]
+    for column, value in (("actor_id", actor_id), ("action", action), ("resource_type", resource_type)):
+        if value is not None:
+            conditions.append(column + " = ?")
+            parameters.append(value)
+    for operator, value in ((">=", date_from), ("<=", date_to)):
+        if value is not None:
+            conditions.append("occurred_at " + operator + " ?")
+            parameters.append(value.astimezone(timezone.utc).isoformat())
+    where = " AND ".join(conditions)
+    with closing(connect()) as connection, connection:
+        connection.execute("BEGIN")
+        total = connection.execute("SELECT COUNT(*) FROM audit_logs WHERE " + where, parameters).fetchone()[0]
+        rows = connection.execute(
+            "SELECT * FROM audit_logs WHERE " + where + " ORDER BY occurred_at DESC, id DESC LIMIT ? OFFSET ?",
+            (*parameters, page_size, (page - 1) * page_size),
+        ).fetchall()
+    return {"items": [dict(row) | {"details": json.loads(row["details"])} for row in rows],
+            "total": total, "page": page, "page_size": page_size}
+
+
 @app.get("/users")
 def list_users(actor: dict = Depends(require_roles("administrador"))):
     with closing(connect()) as connection:
@@ -479,12 +548,16 @@ def assign_incident(incident_id: int, update: AssigneeUpdate,
                     user: dict = Depends(require_roles("administrador"))):
     with closing(connect()) as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
-        if connection.execute("SELECT id FROM incidents WHERE id = ? AND organization_id = ?",
-                              (incident_id, user["organization_id"])).fetchone() is None:
+        previous = connection.execute("SELECT assignee_id FROM incidents WHERE id = ? AND organization_id = ?",
+                              (incident_id, user["organization_id"])).fetchone()
+        if previous is None:
             raise HTTPException(status_code=404, detail="Incident not found")
         require_assignee(connection, update.assignee_id, user["organization_id"], eligible=True)
         connection.execute("UPDATE incidents SET assignee_id = ? WHERE id = ? AND organization_id = ?",
                            (update.assignee_id, incident_id, user["organization_id"]))
+        if previous["assignee_id"] != update.assignee_id:
+            record_audit(connection, user, "assignee_changed", "incident", incident_id,
+                         previous_assignee_id=previous["assignee_id"], new_assignee_id=update.assignee_id)
         row = connection.execute(INCIDENT_SELECT + "WHERE i.id = ? AND i.organization_id = ?",
                                  (incident_id, user["organization_id"])).fetchone()
     return dict(row)
@@ -495,12 +568,16 @@ def assign_risk(risk_id: int, update: AssigneeUpdate,
                 user: dict = Depends(require_roles("administrador"))):
     with closing(connect()) as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
-        if connection.execute("SELECT id FROM risks WHERE id = ? AND organization_id = ?",
-                              (risk_id, user["organization_id"])).fetchone() is None:
+        previous = connection.execute("SELECT assignee_id FROM risks WHERE id = ? AND organization_id = ?",
+                              (risk_id, user["organization_id"])).fetchone()
+        if previous is None:
             raise HTTPException(status_code=404, detail="Risk not found")
         require_assignee(connection, update.assignee_id, user["organization_id"], eligible=True)
         connection.execute("UPDATE risks SET assignee_id = ? WHERE id = ? AND organization_id = ?",
                            (update.assignee_id, risk_id, user["organization_id"]))
+        if previous["assignee_id"] != update.assignee_id:
+            record_audit(connection, user, "assignee_changed", "risk", risk_id,
+                         previous_assignee_id=previous["assignee_id"], new_assignee_id=update.assignee_id)
         row = connection.execute(RISK_SELECT + "WHERE r.id = ? AND r.organization_id = ?",
                                  (risk_id, user["organization_id"])).fetchone()
     return public_risk(row)
@@ -523,6 +600,7 @@ def create_user(user: UserCreate, actor: dict = Depends(require_roles("administr
                     actor["organization_id"],
                 ),
             )
+            record_audit(connection, actor, "created", "user", cursor.lastrowid)
             row = connection.execute(
                 "SELECT id, display_name, email, role, is_active, created_at FROM users WHERE id = ?",
                 (cursor.lastrowid,),
@@ -563,6 +641,16 @@ def update_user(user_id: int, update: UserUpdate, actor: dict = Depends(require_
             ).fetchone()[0]
             if remaining == 0:
                 raise HTTPException(status_code=409, detail="At least one active administrator is required")
+        changes = {key: value for key, value in changes.items() if value != target[key]}
+        if not changes:
+            return public_user(target)
+        removed_assignments = []
+        if not will_be_active or changes.get("role", target["role"]) == "lector":
+            for table, resource_type in (("incidents", "incident"), ("risks", "risk")):
+                removed_assignments.extend((resource_type, row["id"]) for row in connection.execute(
+                    f"SELECT id FROM {table} WHERE assignee_id = ? AND organization_id = ? ORDER BY id",
+                    (user_id, actor["organization_id"]),
+                ))
         assignments = ", ".join(f"{field} = ?" for field in changes)
         try:
             connection.execute(
@@ -573,6 +661,18 @@ def update_user(user_id: int, update: UserUpdate, actor: dict = Depends(require_
             if "users.email" in str(error):
                 raise HTTPException(status_code=409, detail="A user with this email already exists") from error
             raise
+        if "role" in changes:
+            record_audit(connection, actor, "role_changed", "user", user_id,
+                         previous_role=target["role"], new_role=changes["role"])
+        if "is_active" in changes:
+            record_audit(connection, actor, "reactivated" if will_be_active else "deactivated", "user", user_id,
+                         previous_is_active=bool(target["is_active"]), new_is_active=bool(will_be_active))
+        profile_changes = {key + "_changed": True for key in ("display_name", "email") if key in changes}
+        if profile_changes:
+            record_audit(connection, actor, "user_updated", "user", user_id, **profile_changes)
+        for resource_type, resource_id in removed_assignments:
+            record_audit(connection, actor, "assignee_changed", resource_type, resource_id,
+                         previous_assignee_id=user_id, new_assignee_id=None, automatic=True, user_id=user_id)
         row = connection.execute(
             "SELECT id, display_name, email, role, is_active, created_at FROM users WHERE id = ?",
             (user_id,),
@@ -587,6 +687,7 @@ def reset_user_password(
     actor: dict = Depends(require_roles("administrador")),
 ):
     with closing(connect()) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
         target = connection.execute(
             "SELECT id FROM users WHERE id = ? AND organization_id = ?",
             (user_id, actor["organization_id"]),
@@ -598,6 +699,7 @@ def reset_user_password(
             (hash_password(reset.password), user_id, actor["organization_id"]),
         )
         connection.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        record_audit(connection, actor, "password_reset", "user", user_id)
     return {"status": "ok"}
 
 
@@ -610,6 +712,7 @@ def create_control(control: ControlCreate, user: dict = Depends(require_roles("a
             "VALUES (?, ?, ?, ?, ?, ?)",
             (user["organization_id"], control.name, control.description, control.type, control.status, created_at),
         )
+        record_audit(connection, user, "created", "control", cursor.lastrowid)
         row = connection.execute(
             "SELECT * FROM security_controls WHERE id = ? AND organization_id = ?",
             (cursor.lastrowid, user["organization_id"]),
@@ -688,6 +791,7 @@ def link_risk_control(risk_id: int, link: RiskControlCreate,
             "INSERT INTO risk_controls (risk_id, control_id, organization_id) VALUES (?, ?, ?)",
             (risk_id, link.control_id, user["organization_id"]),
         )
+        record_audit(connection, user, "linked", "risk", risk_id, control_id=link.control_id)
     return {"risk_id": risk_id, "control_id": link.control_id}
 
 
@@ -703,6 +807,7 @@ def unlink_risk_control(risk_id: int, control_id: int,
         )
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Link not found")
+        record_audit(connection, user, "unlinked", "risk", risk_id, control_id=control_id)
     return Response(status_code=204)
 
 
@@ -718,6 +823,7 @@ def create_risk(risk: RiskCreate, user: dict = Depends(require_roles("administra
             (user["organization_id"], risk.title, risk.description, risk.probability,
              risk.impact, risk.status, risk.asset_id, created_at),
         )
+        record_audit(connection, user, "created", "risk", cursor.lastrowid, asset_id=risk.asset_id)
         row = connection.execute(RISK_SELECT + "WHERE r.id = ? AND r.organization_id = ?",
                                  (cursor.lastrowid, user["organization_id"])).fetchone()
     return public_risk(row)
@@ -773,6 +879,7 @@ def create_asset(
             (user["organization_id"], asset.name, asset.type, asset.description,
              asset.criticality, created_at),
         )
+        record_audit(connection, user, "created", "asset", cursor.lastrowid)
         row = connection.execute(
             "SELECT * FROM assets WHERE id = ? AND organization_id = ?",
             (cursor.lastrowid, user["organization_id"]),
@@ -855,6 +962,7 @@ def link_incident_asset(incident_id: int, link: IncidentAssetCreate,
             "INSERT INTO incident_assets (incident_id, asset_id, organization_id) VALUES (?, ?, ?)",
             (incident_id, link.asset_id, user["organization_id"]),
         )
+        record_audit(connection, user, "linked", "incident", incident_id, asset_id=link.asset_id)
     return {"incident_id": incident_id, "asset_id": link.asset_id}
 
 
@@ -870,6 +978,7 @@ def unlink_incident_asset(incident_id: int, asset_id: int,
         )
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Link not found")
+        record_audit(connection, user, "unlinked", "incident", incident_id, asset_id=asset_id)
     return Response(status_code=204)
 
 
@@ -889,6 +998,7 @@ def create_incident(
                 created_at, user["organization_id"],
             ),
         )
+        record_audit(connection, user, "created", "incident", cursor.lastrowid)
         row = connection.execute(INCIDENT_SELECT + "WHERE i.id = ?", (cursor.lastrowid,)).fetchone()
     return dict(row)
 
@@ -923,6 +1033,8 @@ def update_incident_status(
                     user["id"],
                 ),
             )
+            record_audit(connection, user, "status_changed", "incident", incident_id,
+                         previous_status=row["status"], new_status=update.status)
         row = connection.execute(
             INCIDENT_SELECT + "WHERE i.id = ? AND i.organization_id = ?",
             (incident_id, user["organization_id"]),
@@ -968,6 +1080,7 @@ def create_incident_note(
             "INSERT INTO incident_notes (incident_id, content, created_at, created_by) VALUES (?, ?, ?, ?)",
             (incident_id, note.content, datetime.now(timezone.utc).isoformat(), user["id"]),
         )
+        record_audit(connection, user, "note_created", "incident", incident_id, note_id=cursor.lastrowid)
         row = connection.execute(
             """
             SELECT n.*, u.display_name AS created_by_name

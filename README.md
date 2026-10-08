@@ -18,6 +18,7 @@ compartido.
 ### Funciones implementadas
 
 - Crear, listar y consultar incidentes.
+- Auditoría local de cambios de negocio y usuarios, con consulta paginada solo para administradores.
 - Asignar responsables opcionales a incidentes y riesgos, con filtros por responsable.
 - Crear, listar y consultar riesgos, con evaluación inicial y activo opcional.
 - Crear, listar y consultar controles de seguridad y vincularlos con riesgos.
@@ -56,6 +57,7 @@ compartido.
 | Crear controles, vincular y desvincular | Sí | Sí | No |
 | Vincular y desvincular activos de incidentes | Sí | Sí | No |
 | Gestionar usuarios (crear, editar, desactivar y restablecer contraseña) | Sí | No | No |
+| Consultar auditoría de la organización | Sí | No | No |
 
 Los cambios existentes anteriores a las migraciones mantienen su contenido,
 pero no se les asigna un usuario retroactivamente. Las sesiones se guardan
@@ -69,7 +71,7 @@ Aún no están implementados:
 - Edición, eliminación y asignación de responsables de activos
 - Edición y eliminación de riesgos y evaluación residual
 - Edición y eliminación de controles de seguridad, evaluación de eficacia
-- Auditoría general más allá del historial de incidentes
+- Eventos de auditoría de autenticación (login, logout, rechazos y expiración)
 - Reportes
 - Dashboard
 
@@ -410,7 +412,7 @@ locales y controles de creación ocultos para lectores.
 
 Prototipo funcional local con autenticación, permisos y aislamiento entre
 organizaciones, con creación y consulta de activos. Edición y eliminación de
-activos, edición y eliminación de riesgos y controles, auditoría general,
+activos, edición y eliminación de riesgos y controles, auditoría de autenticación,
 reportes y dashboard continúan pendientes.
 
 ## Activos afectados por incidente
@@ -631,7 +633,8 @@ Un fallo revierte tanto el usuario como todas las asignaciones. Los recursos y
 sus vínculos se conservan; reactivar o devolver el rol analista no reconstruye
 las asignaciones anteriores. Esta protección funciona también en SQL directo.
 Se mantienen SQL parametrizado, autenticación y CSRF. La asignación no genera
-notificaciones ni mensajes; la auditoría general queda pendiente.
+notificaciones ni mensajes. La migración 009 incorpora auditoría local de estos
+cambios y de las retiradas automáticas; la auditoría de autenticación queda pendiente.
 
 En los detalles se muestra el nombre o **Sin asignar**. Los administradores ven
 selector, **Asignar responsable** y **Quitar responsable**; otros roles solo la
@@ -665,3 +668,36 @@ a lector. Un fallo provocado en la limpieza de riesgos comprueba la reversión
 completa del usuario y de ambas colecciones. Chrome comprueba asignación,
 reasignación, eliminación, filtros, limpieza desde Usuarios, lector, texto seguro,
 errores y anchos 1280/390.
+
+
+## Auditoría inicial (migración 009)
+
+La sección **Auditoría**, visible solo para administradores, registra operaciones
+exitosas de negocio y administración de usuarios: creaciones, cambios de estado,
+notas (solo su ID), vínculos, responsables, roles, desactivaciones y
+restablecimientos de contraseña. También registra cada responsable retirado
+al desactivar una cuenta o convertirla en lector. El ID y nombre histórico del
+actor se conservan aunque cambie su cuenta.
+
+Cada evento se guarda en la misma transacción que el cambio. Si la auditoría
+falla se revierte toda la operación, incluidos efectos automáticos y sesiones.
+Las solicitudes fallidas y los cambios sin efecto no generan eventos. La
+migración conserva todos los datos y no reconstruye eventos anteriores.
+Los detalles tienen una lista explícita de campos permitidos y no incluyen
+contraseñas, hashes, cookies, tokens, notas, descripciones ni cuerpos completos.
+
+`GET /audit-logs` exige administrador y siempre consulta su organización.
+Filtros opcionales: `actor_id`, `action`, `resource_type`, `date_from`, `date_to`,
+combinados con AND. Fechas ISO con zona y límites inclusivos; rango invertido
+inválido. Paginación: `page=1`, `page_size=25` por defecto, máximo 100 eventos
+por página. Orden por fecha UTC descendente e ID descendente. No hay edición
+ni eliminación de eventos por API. La interfaz muestra fechas locales, detalles
+comprensibles, filtros y mensajes de carga/error/vacío; dispone de Actualizar.
+
+Las pruebas de auditoría se incluyen en la suite completa. La comprobación
+opcional de Chrome cubre además la sección, filtros, paginación, fechas locales,
+renderizado seguro, errores de red y ancho de celular. Los comandos y pasos
+manuales están en [docs/audit.md](docs/audit.md).
+
+Es **auditoría local**: no garantiza resistencia a modificaciones de alguien con
+acceso directo a SQLite. Los eventos de autenticación quedan pendientes.

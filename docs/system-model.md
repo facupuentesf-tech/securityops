@@ -85,7 +85,7 @@ for shared deployment.
 ## Original Domain Vision: Future Work
 
 The following entities and relationships preserve the original vision.
-Asset extensions, risk/control extensions and general audit logs remain future work.
+Asset extensions, risk/control extensions and authentication audit events remain future work.
 Responsible users for incidents and risks are implemented.
 
 The planned domain entities are:
@@ -95,7 +95,7 @@ The planned domain entities are:
 - Risks
 - Security Controls
 - Incidents
-- Audit Logs
+- Authentication audit events (business/user audit logs implemented)
 
 ### Asset extensions
 
@@ -153,17 +153,11 @@ Each incident should contain:
 - Responsible person
 - Related asset
 
-### Audit Logs
+### Audit Logs (implemented)
 
-Audit logs record important actions performed within the platform.
-
-Examples:
-
-- User creation
-- Role changes
-- Risk modifications
-- Incident creation
-- Permission changes
+Local audit logs record successful business and user administration changes.
+Migration 009 adds historical actor identity, UTC timestamps and minimal JSON
+details. Authentication events remain planned; see [audit.md](audit.md).
 
 ## Incident-asset links (implemented)
 
@@ -230,4 +224,21 @@ role change to reader clears the user's assignments atomically with the account
 update. Any failure reverses the whole operation. Reactivation never reconstructs
 responsibility automatically. Foreign-organization assignments and organization
 changes that would invalidate a current assignment are prevented by the database.
-No notifications or general audit events are introduced.
+No notifications are introduced. Migration 009 records API assignment changes and
+automatic removals as local audit events.
+
+
+## Local audit logs (migration 009)
+
+Business and user-administration API operations now insert organization-scoped
+local audit events in the same transaction, including automatic assignment
+removals. Insert failure rolls back the full change; failed requests and no-op
+changes produce no events. Actor ID/name snapshots preserve historical identity;
+explicit detail allowlists exclude credentials, secrets and free resource text.
+Administrator-only `GET /audit-logs` provides AND filters and bounded pagination
+ordered by UTC timestamp/ID descending. The responsive Spanish UI renders safe
+text and local dates with loading/error/empty feedback. Migration 009 preserves
+all existing data and never reconstructs past events. Authentication events are
+deferred. This local audit does not resist modification by someone with direct
+SQLite access. See [audit.md](audit.md) for the event contract, query validation,
+transaction guarantees, tests and manual verification steps.

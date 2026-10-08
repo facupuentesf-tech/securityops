@@ -1,4 +1,13 @@
 "use strict";
+let auditVersion = 0;
+let auditPage = 1;
+let auditFilters = new URLSearchParams();
+const auditActions = {created: "Creación", status_changed: "Cambio de estado", note_created: "Creación de nota",
+  linked: "Vinculación", unlinked: "Desvinculación", assignee_changed: "Cambio de responsable",
+  role_changed: "Cambio de rol", deactivated: "Desactivación", reactivated: "Reactivación",
+  password_reset: "Restablecimiento de contraseña", user_updated: "Actualización de cuenta"};
+const auditResources = {incident: "Incidente", asset: "Activo", risk: "Riesgo", control: "Control", user: "Usuario"};
+
 const $ = (id) => document.getElementById(id);
 const statuses = {open: "Abierto", investigating: "En investigación", resolved: "Resuelto"};
 const severities = {low: "Baja", medium: "Media", high: "Alta", critical: "Crítica"};
@@ -43,6 +52,11 @@ function message(text, error = false) {
   $("message").hidden = !text;
 }
 function showLogin() {
+  ++auditVersion;
+  $("audit-view").hidden = true;
+  $("audit-list").replaceChildren();
+  $("audit-filter-form").reset();
+  auditFilters = new URLSearchParams(); auditPage = 1;
   currentUser = null;
   csrfToken = null;
   selectedId = null;
@@ -127,7 +141,8 @@ function showApplication(session) {
   $("note-form").hidden = !canWrite;
   $("users-view").hidden = currentUser.role !== "administrador";
   loadList();
-  if (currentUser.role === "administrador") loadUsers();
+  $("audit-view").hidden = currentUser.role !== "administrador";
+  if (currentUser.role === "administrador") { loadUsers(); loadAudit(); }
 }
 async function api(path, method = "GET", body) {
   let response;
@@ -1017,3 +1032,62 @@ for (const kind of ["incidents", "risks"]) {
   });
 }
 start();
+
+function auditDetails(event) {
+  const d = event.details;
+  const parts = [];
+  if ("previous_status" in d) parts.push(`Estado: ${statuses[d.previous_status] || d.previous_status} → ${statuses[d.new_status] || d.new_status}`);
+  if ("previous_role" in d) parts.push(`Rol: ${roles[d.previous_role]} → ${roles[d.new_role]}`);
+  if ("previous_is_active" in d) parts.push(`Cuenta: ${d.previous_is_active ? "activa" : "inactiva"} → ${d.new_is_active ? "activa" : "inactiva"}`);
+  if ("previous_assignee_id" in d) parts.push(`Responsable: ${d.previous_assignee_id === null ? "Sin asignar" : "Usuario #" + d.previous_assignee_id} → ${d.new_assignee_id === null ? "Sin asignar" : "Usuario #" + d.new_assignee_id}${d.automatic ? " (retirada automática por cambio de cuenta)" : ""}`);
+  if (d.asset_id != null) parts.push(`Activo #${d.asset_id}`);
+  if (d.control_id != null) parts.push(`Control #${d.control_id}`);
+  if (d.note_id != null) parts.push(`Nota #${d.note_id}`);
+  if (d.display_name_changed) parts.push("Nombre actualizado");
+  if (d.email_changed) parts.push("Correo actualizado");
+  return parts.join(" · ") || "Sin detalles adicionales";
+}
+async function loadAudit() {
+  const version = ++auditVersion;
+  if (currentUser?.role !== "administrador") return;
+  $("audit-list").replaceChildren();
+  $("audit-feedback").textContent = "Cargando auditoría…";
+  $("audit-page").textContent = "";
+  $("audit-previous").disabled = true; $("audit-next").disabled = true;
+  const query = new URLSearchParams(auditFilters);
+  query.set("page", auditPage); query.set("page_size", 25);
+  try {
+    const data = await api("/audit-logs?" + query);
+    if (version !== auditVersion || currentUser?.role !== "administrador") return;
+    for (const event of data.items) {
+      const row = element("li");
+      row.append(dateNode(event.occurred_at), element("p", `${event.actor_name} (#${event.actor_id}) · ${auditActions[event.action]} · ${auditResources[event.resource_type]} #${event.resource_id}`, "user-text"), element("p", auditDetails(event), "user-text muted"));
+      $("audit-list").append(row);
+    }
+    $("audit-feedback").textContent = data.items.length ? "" : "No hay eventos para estos filtros.";
+    $("audit-page").textContent = `Página ${data.page} · ${data.total} eventos`;
+    $("audit-previous").disabled = data.page <= 1;
+    $("audit-next").disabled = data.page * data.page_size >= data.total;
+  } catch (error) {
+    if (version !== auditVersion || currentUser?.role !== "administrador") return;
+    $("audit-feedback").textContent = error.message;
+  }
+}
+for (const [name, labels] of [["action", auditActions], ["resource_type", auditResources]]) {
+  for (const [value, label] of Object.entries(labels)) {
+    const option = element("option", label); option.value = value;
+    $("audit-filter-form").elements[name].append(option);
+  }
+}
+$("audit-filter-form").addEventListener("submit", event => {
+  event.preventDefault();
+  auditFilters = new URLSearchParams();
+  for (const [name, value] of new FormData(event.currentTarget)) {
+    if (value) auditFilters.set(name, name.startsWith("date_") ? new Date(value).toISOString() : value);
+  }
+  auditPage = 1; loadAudit();
+});
+$("clear-audit-filters").addEventListener("click", () => { $("audit-filter-form").reset(); auditFilters = new URLSearchParams(); auditPage = 1; loadAudit(); });
+$("reload-audit").addEventListener("click", loadAudit);
+$("audit-previous").addEventListener("click", () => { --auditPage; loadAudit(); });
+$("audit-next").addEventListener("click", () => { ++auditPage; loadAudit(); });

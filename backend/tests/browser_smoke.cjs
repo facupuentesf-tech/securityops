@@ -57,6 +57,9 @@ async function poll(fn) {
   await evaluate(`(() => {const f=document.getElementById('login-form');f.elements.email.value='admin@example.test';f.elements.password.value='correct horse battery';f.requestSubmit();})()`);
   await wait(`document.getElementById('list-feedback')?.textContent.includes('Todavía')`);
   assert.equal(await evaluate(`document.documentElement.lang`),'es');
+  await wait(`!document.getElementById('audit-view').hidden && document.getElementById('audit-feedback').textContent.includes('No hay eventos')`);
+  assert.equal(await evaluate(`document.getElementById('audit-previous').disabled && document.getElementById('audit-next').disabled`),true);
+
   await evaluate(`document.getElementById('new-button').click()`);
   const payload = '<img src=x onerror="window.xss=true">';
   await evaluate(`(() => {const f=document.getElementById('create-form');f.elements.title.value=${JSON.stringify(payload)};f.elements.description.value='Descripción de prueba <script>alert(1)</script>';f.elements.severity.value='high';f.requestSubmit();})()`);
@@ -323,6 +326,43 @@ async function poll(fn) {
   }
   await evaluate(`(() => {const f=document.getElementById('user-create-form');f.elements.display_name.value='Smoke Reader';f.elements.email.value='smoke-reader@example.test';f.elements.password.value='smoke reader password';f.elements.role.value='lector';f.requestSubmit();})()`);
   await wait(`document.getElementById('user-list').textContent.includes('smoke-reader@example.test')`);
+  // Audit list, immutable historical actor text, combined filters, pagination and feedback.
+  await evaluate(`(async () => {
+    await api('/users/1', 'PATCH', {display_name: ${JSON.stringify(payload)}});
+    const incident = (await api('/incidents'))[0];
+    await api('/incidents/' + incident.id + '/notes', 'POST', {content: 'AUDIT_SECRET_NOTE'});
+    await api('/users/1', 'PATCH', {display_name: 'Test Administrator'});
+    const logs = await api('/audit-logs');
+    for (let i=logs.total; i<28; i++) await api('/incidents/' + incident.id + '/notes', 'POST', {content: 'Pagination smoke'});
+    document.getElementById('reload-audit').click();
+  })()`);
+  await wait(`document.querySelectorAll('#audit-list li').length === 25 && !document.getElementById('audit-next').disabled`);
+  assert.equal(await evaluate(`document.getElementById('audit-list').textContent.includes(${JSON.stringify(payload)}) && !document.querySelector('#audit-list img') && !window.xss && !document.getElementById('audit-list').textContent.includes('AUDIT_SECRET_NOTE')`),true);
+  assert.equal(await evaluate(`(() => { const t=document.querySelector('#audit-list time'); return t.textContent === new Intl.DateTimeFormat('es', {dateStyle:'medium', timeStyle:'short'}).format(new Date(t.dateTime)); })()`),true);
+  const firstAuditId = await evaluate(`document.querySelector('#audit-list li').textContent`);
+  await evaluate(`document.getElementById('audit-next').click()`);
+  await wait(`document.getElementById('audit-page').textContent.includes('Página 2')`);
+  assert.notEqual(await evaluate(`document.querySelector('#audit-list li').textContent`), firstAuditId);
+  await evaluate(`document.getElementById('audit-previous').click()`);
+  await wait(`document.getElementById('audit-page').textContent.includes('Página 1')`);
+  await evaluate(`(() => {const f=document.getElementById('audit-filter-form'); f.elements.actor_id.value='1';f.elements.action.value='assignee_changed';f.elements.resource_type.value='risk'; f.elements.date_from.value='2020-01-01T00:00:00';f.elements.date_to.value='2099-01-01T00:00:00';f.requestSubmit();})()`);
+  await wait(`document.getElementById('audit-list').textContent.includes('retirada automática')`);
+  assert.equal(await evaluate(`Array.from(document.querySelectorAll('#audit-list li')).every(row=>row.textContent.includes('Cambio de responsable') && row.textContent.includes('Riesgo #'))`),true);
+  await evaluate(`document.getElementById('audit-filter-form').elements.actor_id.value='99999';document.getElementById('audit-filter-form').requestSubmit()`);
+  await wait(`document.getElementById('audit-feedback').textContent.includes('No hay eventos')`);
+  await evaluate(`document.getElementById('audit-filter-form').elements.date_from.value='2099-01-01T00:00:00';document.getElementById('audit-filter-form').elements.date_to.value='2020-01-01T00:00:00';document.getElementById('audit-filter-form').requestSubmit()`);
+  await wait(`document.getElementById('audit-feedback').textContent.includes('Revisá')`);
+  await evaluate(`document.getElementById('clear-audit-filters').click()`);
+  await wait(`document.querySelectorAll('#audit-list li').length === 25`);
+  await evaluate(`window.fetch=async()=>{throw new TypeError('offline')};document.getElementById('reload-audit').click()`);
+  await wait(`document.getElementById('audit-feedback').textContent.includes('conectar')`);
+  await evaluate(`window.fetch=window.originalFetch; window.fetch=(...args)=>new Promise(resolve=>{window.releaseAudit=()=>resolve(window.originalFetch(...args));});document.getElementById('reload-audit').click()`);
+  await wait(`document.getElementById('audit-feedback').textContent.includes('Cargando')`);
+  await evaluate(`window.fetch=window.originalFetch;window.releaseAudit()`);
+  await wait(`document.querySelectorAll('#audit-list li').length === 25`);
+  await command('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+  assert.equal(await evaluate(`document.documentElement.scrollWidth <= 390 && document.getElementById('audit-view').getBoundingClientRect().width <= 390`),true);
+  await command('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
   await evaluate(`document.getElementById('logout-button').click()`);
   await wait(`document.getElementById('login-view')?.hidden === false`);
   await evaluate(`(() => {const f=document.getElementById('login-form');f.elements.email.value='smoke-reader@example.test';f.elements.password.value='smoke reader password';f.requestSubmit();})()`);
@@ -338,6 +378,7 @@ async function poll(fn) {
     throw error;
   }
   assert.equal(await evaluate(`document.getElementById('new-button').hidden && document.getElementById('users-view').hidden`),true);
+  assert.equal(await evaluate(`document.getElementById('audit-view').hidden && document.getElementById('audit-list').children.length === 0`),true);
   await wait(`document.querySelectorAll('#asset-list .asset').length === 1`);
   assert.equal(await evaluate(`document.getElementById('new-asset-button').hidden && document.getElementById('asset-create-panel').hidden`),true);
   await evaluate(`document.querySelector('.asset-name').click()`);
@@ -361,7 +402,7 @@ async function poll(fn) {
   await evaluate(`document.querySelector('.control-name').click()`);
   await wait(`!document.getElementById('control-detail-content').hidden`);
   assert.equal(await evaluate(`document.getElementById('control-detail-name').textContent`),payload);
-  console.log('OK: login/logout, administración de usuarios, lector, responsables, limpieza de asignaciones, incidentes, activos, riesgos, controles, vínculos, historial, notas, filtros, XSS, fechas locales, errores de red, /docs y anchos 1280/390.');
+  console.log('OK: auditoría (permisos, filtros, paginación, carga/error/vacío, XSS, fechas y móvil), login/logout, administración de usuarios, lector, responsables, limpieza de asignaciones, incidentes, activos, riesgos, controles, vínculos, historial, notas, filtros, XSS, fechas locales, errores de red, /docs y anchos 1280/390.');
   await command('Browser.close');
 })().catch(error => { console.error(error);process.exitCode=1; }).finally(async () => {
   if(socket && socket.readyState===WebSocket.OPEN) {

@@ -84,8 +84,9 @@ assigns all existing users and incidents to an initial organization and
 preserves existing sessions, history and notes. Migration 004 adds assets without
 altering existing data. Existing history and notes are
 preserved but cannot be attributed to users retroactively. Incident status
-history is still a specific incident feature, not the general audit module
-envisioned below. Shared deployment is not implemented or supported.
+history remains a specific incident feature. Migration 009 adds local business
+and user-administration audit logs without reconstructing earlier events.
+Shared deployment is not implemented or supported.
 
 ## Original Project Scope and Future Work
 
@@ -96,7 +97,7 @@ the following capabilities remain future work:
 2. Risk editing/deletion and residual evaluation
 3. Security control editing/deletion and effectiveness assessment
 4. Further incident workflow extensions
-5. General audit logs
+5. Authentication audit events and stronger audit storage
 6. Dashboard and basic metrics
 
 Features such as automated vulnerability scanning, advanced compliance
@@ -163,4 +164,21 @@ Database guards prevent cross-tenant or ineligible assignments. Deactivation or
 conversion to reader clears both resource collections in the account-update
 transaction, preserving resources and all other relationships. Injected-failure
 tests verify complete rollback. Assignment introduces no notifications/messages;
-general auditing remains future work.
+local business/user auditing is implemented by migration 009; authentication
+auditing remains future work.
+
+
+## Local audit logs (migration 009)
+
+Business and user-administration API operations now insert organization-scoped
+local audit events in the same transaction, including automatic assignment
+removals. Insert failure rolls back the full change; failed requests and no-op
+changes produce no events. Actor ID/name snapshots preserve historical identity;
+explicit detail allowlists exclude credentials, secrets and free resource text.
+Administrator-only `GET /audit-logs` provides AND filters and bounded pagination
+ordered by UTC timestamp/ID descending. The responsive Spanish UI renders safe
+text and local dates with loading/error/empty feedback. Migration 009 preserves
+all existing data and never reconstructs past events. Authentication events are
+deferred. This local audit does not resist modification by someone with direct
+SQLite access. See [audit.md](audit.md) for the event contract, query validation,
+transaction guarantees, tests and manual verification steps.
