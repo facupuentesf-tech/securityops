@@ -461,7 +461,7 @@ class IncidentTests(unittest.TestCase):
         with closing(sqlite3.connect(self.database)) as connection:
             self.assertEqual(
                 connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(),
-                [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,), (9,)],
+                [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,), (9,), (10,)],
             )
             self.assertEqual(
                 connection.execute("SELECT organization_id FROM incidents WHERE id = 17").fetchone()[0],
@@ -1147,7 +1147,7 @@ class IncidentTests(unittest.TestCase):
         with closing(sqlite3.connect(self.database)) as connection:
             after = {table: legacy_snapshot(connection, table) for table in tables}
             self.assertEqual(before, after)
-            self.assertEqual(connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(), [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,), (9,)])
+            self.assertEqual(connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(), [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,), (9,), (10,)])
         code, asset = self.request("POST", "/assets", self.asset_payload(description="Persistent asset"))
         self.assertEqual(code, 201)
         self.stop_server()

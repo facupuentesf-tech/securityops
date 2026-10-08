@@ -25,6 +25,7 @@ eventos anteriores; el actor no tiene una FK ni eliminación en cascada.
 | `deactivated`, `reactivated` | Cambio efectivo del acceso a la cuenta | `previous_is_active`, `new_is_active` |
 | `password_reset` | Restablecer contraseña y revocar sesiones | `{}` |
 | `user_updated` | Cambio efectivo de nombre/correo | Solo indicadores `display_name_changed`, `email_changed` |
+| `updated` | Edición de activo, riesgo o control (migración 010) | Indicadores de textos cambiados; pares de valores/IDs anteriores/nuevos de campos enumerados, numéricos y asociaciones |
 
 No se almacenan contraseñas, hashes, cookies, tokens, cuerpos completos,
 descripciones, títulos de recursos ni contenido de notas. Tampoco se guardan
@@ -120,3 +121,6 @@ acceso directo a SQLite**. No incluye firmas, encadenamiento criptográfico,
 almacenamiento externo ni protección contra el administrador del sistema local.
 Los cambios SQL directos no pasan por los eventos de negocio de la API.
 Los eventos de autenticación (login, logout, rechazo o expiración) quedan pendientes.
+
+La migración 010 amplía las acciones permitidas conservando eventos y secuencias.
+Detalle de las ediciones: [resource-edits.md](resource-edits.md).

@@ -148,7 +148,7 @@ database, including authentication, permissions, migration of legacy data,
 incident and asset workflows, tenant isolation and persistence. An optional Node.js/Chrome smoke
 test exercises the authenticated interface at desktop and mobile widths.
 
-Asset editing and deletion, risk/control extensions, authentication audit events, reports and further dashboard metrics remain
+Asset deletion, risk/control extensions, authentication audit events, reports and further dashboard metrics remain
 future work. React, PostgreSQL and Docker are possible later choices.
 
 ## Incident-asset links (implemented)
@@ -290,3 +290,24 @@ automatic refresh on return, manual refresh, loading/error/retry/empty feedback
 and responsive accessible layouts are provided. No schema migration or data
 writes are needed. See [dashboard.md](dashboard.md) for the response contract,
 consistent-read test and API/browser/manual verification.
+
+
+## Partial resource editing (implemented, migration 010)
+
+Administrator/analyst PATCH routes on assets, risks and controls accept only
+editable fields, preserve omitted values and reject empty bodies, unknown or
+protected fields and invalid values with 422. Null is limited to descriptions
+and the optional risk asset_id. Missing/foreign resources and associated assets
+return 404. Authenticated organization/actor and CSRF checks come from the server.
+Risk score/level are recalculated; assignees, creation dates and many-to-many
+links are preserved. Implementing a control never reduces risk score automatically.
+
+Effective changes and one minimal updated audit event share BEGIN IMMEDIATE and
+a transaction; audit insertion failure rolls back the edit. Text details are
+field-change flags, other details are previous/new enum/number/ID values. No-op
+or failed requests generate no events. Migration 010 extends the audit action
+CHECK while preserving events, indexes and ID high-water marks; no business data
+is rewritten. The safe responsive UI offers role-protected prefilled forms,
+save/cancel, validation/error feedback and duplicate-submit guards. Detail/list
+refresh after save and Resumen refreshes on return. Resource deletion is not
+implemented. See [resource-edits.md](resource-edits.md) for the contract and tests.

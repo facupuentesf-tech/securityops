@@ -53,7 +53,7 @@ Los conteos y listas parten de las tablas de incidentes, activos, riesgos y
 controles. No unen tablas de relaciones muchos a muchos: varios activos de un
 incidente o controles de un riesgo no multiplican filas ni totales. La consulta
 no genera auditoría, no escribe datos ni requiere una migración nueva. Se usan
-las migraciones existentes hasta 009.
+las migraciones existentes hasta 010.
 
 ## Interfaz
 

@@ -1,4 +1,5 @@
 "use strict";
+const editors = Object.fromEntries(["asset", "risk", "control"].map(kind => [kind, {version: 0, resource: null, saving: false, loading: false}]));
 let dashboardVersion = 0;
 let activeSection = "summary";
 let auditVersion = 0;
@@ -7,7 +8,7 @@ let auditFilters = new URLSearchParams();
 const auditActions = {created: "Creación", status_changed: "Cambio de estado", note_created: "Creación de nota",
   linked: "Vinculación", unlinked: "Desvinculación", assignee_changed: "Cambio de responsable",
   role_changed: "Cambio de rol", deactivated: "Desactivación", reactivated: "Reactivación",
-  password_reset: "Restablecimiento de contraseña", user_updated: "Actualización de cuenta"};
+  password_reset: "Restablecimiento de contraseña", user_updated: "Actualización de cuenta", updated: "Edición"};
 const auditResources = {incident: "Incidente", asset: "Activo", risk: "Riesgo", control: "Control", user: "Usuario"};
 
 const $ = (id) => document.getElementById(id);
@@ -54,6 +55,7 @@ function message(text, error = false) {
   $("message").hidden = !text;
 }
 function showLogin() {
+  for (const kind of Object.keys(editors)) resetEditor(kind);
   ++dashboardVersion;
   $("dashboard-content").hidden = true;
   $("dashboard-cards").replaceChildren();
@@ -128,6 +130,7 @@ function showApplication(session) {
   $("account").hidden = false;
   $("account-name").textContent = `${currentUser.display_name} · ${roles[currentUser.role]}`;
   const canWrite = currentUser.role !== "lector";
+  for (const kind of Object.keys(editors)) resetEditor(kind);
   if (currentUser.role !== "administrador") {
     $("incident-assignee-form").hidden = true;
     $("risk-assignee-form").hidden = true;
@@ -494,6 +497,7 @@ async function loadAssets() {
   }
 }
 async function openAssetDetail(id) {
+  resetEditor("asset");
   const version = ++assetDetailVersion;
   $("asset-create-panel").hidden = true;
   $("asset-list-panel").hidden = true;
@@ -503,6 +507,7 @@ async function openAssetDetail(id) {
   try {
     const asset = await api(`/assets/${id}`);
     if (version !== assetDetailVersion) return;
+    prepareEditor("asset", asset);
     $("asset-detail-id").textContent = `ACTIVO #${asset.id}`;
     $("asset-detail-name").textContent = asset.name;
     $("asset-detail-description").textContent = asset.description || "Sin descripción.";
@@ -533,6 +538,7 @@ $("cancel-asset-create").addEventListener("click", () => { $("asset-create-panel
 $("asset-filter-form").addEventListener("submit", (event) => { event.preventDefault(); loadAssets(); });
 $("clear-asset-filters").addEventListener("click", () => { $("asset-filter-form").reset(); loadAssets(); });
 $("asset-back-button").addEventListener("click", () => {
+  resetEditor("asset");
   ++assetDetailVersion;
   $("asset-detail-panel").hidden = true;
   $("asset-list-panel").hidden = false;
@@ -702,6 +708,7 @@ async function loadRisks() {
 }
 
 async function openRiskDetail(id) {
+  resetEditor("risk");
   selectedRiskId = id;
   const version = ++riskDetailVersion;
   $("risk-assignee-form").hidden = true;
@@ -719,6 +726,7 @@ async function openRiskDetail(id) {
   try {
     const risk = await api(`/risks/${id}`);
     if (version !== riskDetailVersion || !currentUser) return;
+    prepareEditor("risk", risk);
     $("risk-detail-id").textContent = `RIESGO #${risk.id}`;
     $("risk-detail-title").textContent = risk.title;
     $("risk-detail-description").textContent = risk.description || "Sin descripción.";
@@ -753,6 +761,7 @@ $("risk-assets-retry").addEventListener("click", loadRiskAssets);
 $("risk-filter-form").addEventListener("submit", event => { event.preventDefault(); loadRisks(); });
 $("clear-risk-filters").addEventListener("click", () => { $("risk-filter-form").reset(); loadRisks(); loadRiskAssets(); });
 $("risk-back-button").addEventListener("click", () => {
+  resetEditor("risk");
   ++riskDetailVersion;
   $("risk-detail-panel").hidden = true;
   $("risk-list-panel").hidden = false;
@@ -807,6 +816,7 @@ async function loadControls() {
   }
 }
 async function openControlDetail(id) {
+  resetEditor("control");
   const version = ++controlDetailVersion;
   $("control-create-panel").hidden = true;
   $("control-list-panel").hidden = true;
@@ -816,6 +826,7 @@ async function openControlDetail(id) {
   try {
     const control = await api(`/controls/${id}`);
     if (version !== controlDetailVersion || !currentUser) return;
+    prepareEditor("control", control);
     $("control-detail-id").textContent = `CONTROL #${control.id}`;
     $("control-detail-name").textContent = control.name;
     $("control-detail-description").textContent = control.description || "Sin descripción.";
@@ -844,6 +855,7 @@ $("cancel-control-create").addEventListener("click", () => { ++controlDetailVers
 $("control-filter-form").addEventListener("submit", event => { event.preventDefault(); loadControls(); });
 $("clear-control-filters").addEventListener("click", () => { $("control-filter-form").reset(); loadControls(); });
 $("control-back-button").addEventListener("click", () => {
+  resetEditor("control");
   ++controlDetailVersion;
   $("control-detail-panel").hidden = true;
   $("control-list-panel").hidden = false;
@@ -1044,7 +1056,17 @@ for (const kind of ["incidents", "risks"]) {
 function auditDetails(event) {
   const d = event.details;
   const parts = [];
-  if ("previous_status" in d) parts.push(`Estado: ${statuses[d.previous_status] || d.previous_status} → ${statuses[d.new_status] || d.new_status}`);
+  for (const [field, label] of [["name", "Nombre actualizado"], ["title", "Título actualizado"], ["description", "Descripción actualizada"]]) {
+    if (d[field + "_changed"]) parts.push(label);
+  }
+  const statusLabels = {...statuses, ...riskStatuses, ...controlStatuses};
+  for (const [field, label, labels] of [["type", "Tipo", {...assetTypes, ...controlTypes}], ["criticality", "Criticidad", severities], ["probability", "Probabilidad", {}], ["impact", "Impacto", {}], ["asset_id", "Activo", {}]]) {
+    if ("previous_" + field in d) {
+      const value = v => v === null ? "Sin asociación" : (labels[v] || (field === "asset_id" ? "#" + v : v));
+      parts.push(`${label}: ${value(d["previous_" + field])} → ${value(d["new_" + field])}`);
+    }
+  }
+  if ("previous_status" in d) parts.push(`Estado: ${statusLabels[d.previous_status] || d.previous_status} → ${statusLabels[d.new_status] || d.new_status}`);
   if ("previous_role" in d) parts.push(`Rol: ${roles[d.previous_role]} → ${roles[d.new_role]}`);
   if ("previous_is_active" in d) parts.push(`Cuenta: ${d.previous_is_active ? "activa" : "inactiva"} → ${d.new_is_active ? "activa" : "inactiva"}`);
   if ("previous_assignee_id" in d) parts.push(`Responsable: ${d.previous_assignee_id === null ? "Sin asignar" : "Usuario #" + d.previous_assignee_id} → ${d.new_assignee_id === null ? "Sin asignar" : "Usuario #" + d.new_assignee_id}${d.automatic ? " (retirada automática por cambio de cuenta)" : ""}`);
@@ -1103,6 +1125,11 @@ $("audit-next").addEventListener("click", () => { ++auditPage; loadAudit(); });
 
 function showSection(section, focus = true) {
   if (!currentUser) return;
+  if (section === "summary") for (const kind of Object.keys(editors)) {
+    const resource = editors[kind].resource;
+    resetEditor(kind);
+    if (resource) prepareEditor(kind, resource);
+  }
   activeSection = section;
   $("dashboard-view").hidden = section !== "summary";
   $("management-view").hidden = section !== "management";
@@ -1194,4 +1221,131 @@ $("summary-nav").addEventListener("click", () => showSection("summary"));
 $("management-nav").addEventListener("click", () => showSection("management"));
 $("reload-dashboard").addEventListener("click", loadDashboard);
 $("retry-dashboard").addEventListener("click", loadDashboard);
+
+
+const editSchemas = {
+  asset: [["name", "Nombre", "text"], ["description", "Descripción opcional", "textarea"], ["type", "Tipo", assetTypes], ["criticality", "Criticidad", severities]],
+  risk: [["title", "Título", "text"], ["description", "Descripción opcional", "textarea"], ["probability", "Probabilidad (1–5)", "number"], ["impact", "Impacto (1–5)", "number"], ["status", "Estado", riskStatuses], ["asset_id", "Activo asociado", {}]],
+  control: [["name", "Nombre", "text"], ["description", "Descripción opcional", "textarea"], ["type", "Tipo", controlTypes], ["status", "Estado", controlStatuses]],
+};
+function resetEditor(kind) {
+  const state = editors[kind]; ++state.version;
+  state.resource = null; state.saving = false; state.loading = false;
+  $(kind + "-edit-button").hidden = true;
+  $(kind + "-edit-panel").hidden = true;
+  $(kind + "-edit-feedback").textContent = "";
+  const form = $(kind + "-edit-form");
+  for (const control of form.elements) control.disabled = false;
+  form.querySelector('button[type="submit"]').textContent = "Guardar";
+}
+function prepareEditor(kind, resource) {
+  editors[kind].resource = resource;
+  $(kind + "-edit-button").hidden = !currentUser || currentUser.role === "lector";
+}
+async function openEditor(kind) {
+  const state = editors[kind];
+  if (!state.resource || !currentUser || currentUser.role === "lector" || state.saving) return;
+  const version = ++state.version;
+  const form = $(kind + "-edit-form");
+  $(kind + "-edit-panel").hidden = false;
+  $(kind + "-edit-feedback").textContent = "";
+  for (const [name] of editSchemas[kind]) {
+    const field = form.elements[name];
+    if (name === "asset_id") {
+      const option = element("option", "Sin activo asociado"); option.value = "";
+      field.replaceChildren(option);
+      if (state.resource.asset_id !== null) {
+        const current = element("option", `${state.resource.asset_name} (#${state.resource.asset_id})`);
+        current.value = state.resource.asset_id; field.append(current);
+      }
+    }
+    field.value = state.resource[name] ?? "";
+  }
+  form.elements[editSchemas[kind][0][0]].focus();
+  if (kind === "risk") await loadEditorAssets(version);
+}
+async function loadEditorAssets(version) {
+  const state = editors.risk, form = $("risk-edit-form");
+  const selected = form.elements.asset_id.value;
+  state.loading = true;
+  form.querySelector('button[type="submit"]').disabled = true;
+  form.elements.asset_id.disabled = true;
+  $("risk-edit-feedback").textContent = "Cargando activos…";
+  try {
+    const assets = await api("/assets");
+    if (version !== state.version || !currentUser || currentUser.role === "lector") return;
+    const field = form.elements.asset_id;
+    const option = element("option", "Sin activo asociado"); option.value = "";
+    field.replaceChildren(option);
+    for (const asset of assets) {
+      const option = element("option", `${asset.name} (#${asset.id})`); option.value = asset.id; field.append(option);
+    }
+    field.value = selected;
+    field.disabled = false; state.loading = false;
+    form.querySelector('button[type="submit"]').disabled = false;
+    $("risk-edit-feedback").textContent = "";
+  } catch (error) {
+    if (version !== state.version || !currentUser) return;
+    $("risk-edit-feedback").textContent = error.message + " ";
+    const retry = element("button", "Reintentar carga de activos", "secondary"); retry.type = "button";
+    retry.addEventListener("click", () => loadEditorAssets(version)); $("risk-edit-feedback").append(retry);
+  }
+}
+async function saveEditor(kind) {
+  const state = editors[kind];
+  if (state.saving || state.loading || !state.resource || !currentUser || currentUser.role === "lector") return;
+  const version = state.version, id = state.resource.id;
+  const form = $(kind + "-edit-form"), changes = {};
+  for (const [name] of editSchemas[kind]) {
+    let value = form.elements[name].value;
+    if (name === "name" || name === "title") {
+      value = value.trim();
+      if (!value) { $(kind + "-edit-feedback").textContent = "El nombre o título no puede quedar vacío."; form.elements[name].focus(); return; }
+    }
+    if (name === "description" && value === "" && state.resource.description !== "") value = null;
+    if (name === "probability" || name === "impact") value = Number(value);
+    if (name === "asset_id") value = value === "" ? null : Number(value);
+    if (value !== state.resource[name]) changes[name] = value;
+  }
+  if (!Object.keys(changes).length) {
+    $(kind + "-edit-panel").hidden = true; ++state.version;
+    $(kind + "-edit-button").focus(); message("No hay cambios para guardar."); return;
+  }
+  state.saving = true; busy(form, true, "Guardando…");
+  $(kind + "-edit-feedback").textContent = "";
+  const paths = {asset: "assets", risk: "risks", control: "controls"};
+  const loaders = {asset: loadAssets, risk: loadRisks, control: loadControls};
+  const openers = {asset: openAssetDetail, risk: openRiskDetail, control: openControlDetail};
+  try {
+    await api(`/${paths[kind]}/${id}`, "PATCH", changes);
+    if (version !== state.version || !currentUser) return;
+    await loaders[kind]();
+    if (version !== state.version || !currentUser) return;
+    await openers[kind](id);
+    message("Cambios guardados.");
+  } catch (error) {
+    if (version === state.version && currentUser) $(kind + "-edit-feedback").textContent = error.message;
+  } finally {
+    if (version === state.version) { state.saving = false; busy(form, false); }
+  }
+}
+for (const [kind, schema] of Object.entries(editSchemas)) {
+  for (const [name, text, type] of schema) {
+    const label = element("label", text);
+    const field = element(type === "textarea" ? "textarea" : typeof type === "object" ? "select" : "input");
+    field.name = name;
+    if (typeof type === "object") {
+      for (const [value, text] of Object.entries(type)) { const option = element("option", text); option.value = value; field.append(option); }
+    } else if (type === "textarea") field.rows = 4;
+    else { field.type = type; field.required = true; if (type === "number") { field.min = 1; field.max = 5; field.step = 1; } }
+    label.append(field); $(kind + "-edit-fields").append(label);
+  }
+  $(kind + "-edit-button").addEventListener("click", () => openEditor(kind));
+  $(kind + "-edit-cancel").addEventListener("click", () => {
+    if (editors[kind].saving) return;
+    ++editors[kind].version; editors[kind].loading = false;
+    $(kind + "-edit-panel").hidden = true; $(kind + "-edit-button").focus();
+  });
+  $(kind + "-edit-form").addEventListener("submit", event => { event.preventDefault(); saveEditor(kind); });
+}
 start();

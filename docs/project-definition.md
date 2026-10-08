@@ -93,9 +93,9 @@ Shared deployment is not implemented or supported.
 The original project roadmap is preserved. Beyond the initial incident module,
 the following capabilities remain future work:
 
-1. Asset editing, deletion, ownership assignment
-2. Risk editing/deletion and residual evaluation
-3. Security control editing/deletion and effectiveness assessment
+1. Asset deletion and ownership assignment
+2. Risk deletion and residual evaluation
+3. Security control deletion and effectiveness assessment
 4. Further incident workflow extensions
 5. Authentication audit events and stronger audit storage
 6. Further dashboard metrics (initial summary implemented)
@@ -147,7 +147,7 @@ risk associations. Administrators and analysts create/link/unlink; readers query
 The Spanish UI includes control list, filtering, creation/detail and “Controles
 asociados” on risk details, excluding already-linked controls from the selector.
 The relationship documents a measure, preserves the risk score and makes no
-effectiveness claim. Residual evaluation and control editing/deletion remain
+effectiveness claim. Residual evaluation and control deletion remain
 future work. Versioned migration tests verify preservation of prior module data;
 API and Chrome tests cover permissions, isolation, relations and interface flows.
 
@@ -201,3 +201,24 @@ automatic refresh on return, manual refresh, loading/error/retry/empty feedback
 and responsive accessible layouts are provided. No schema migration or data
 writes are needed. See [dashboard.md](dashboard.md) for the response contract,
 consistent-read test and API/browser/manual verification.
+
+
+## Partial resource editing (implemented, migration 010)
+
+Administrator/analyst PATCH routes on assets, risks and controls accept only
+editable fields, preserve omitted values and reject empty bodies, unknown or
+protected fields and invalid values with 422. Null is limited to descriptions
+and the optional risk asset_id. Missing/foreign resources and associated assets
+return 404. Authenticated organization/actor and CSRF checks come from the server.
+Risk score/level are recalculated; assignees, creation dates and many-to-many
+links are preserved. Implementing a control never reduces risk score automatically.
+
+Effective changes and one minimal updated audit event share BEGIN IMMEDIATE and
+a transaction; audit insertion failure rolls back the edit. Text details are
+field-change flags, other details are previous/new enum/number/ID values. No-op
+or failed requests generate no events. Migration 010 extends the audit action
+CHECK while preserving events, indexes and ID high-water marks; no business data
+is rewritten. The safe responsive UI offers role-protected prefilled forms,
+save/cancel, validation/error feedback and duplicate-submit guards. Detail/list
+refresh after save and Resumen refreshes on return. Resource deletion is not
+implemented. See [resource-edits.md](resource-edits.md) for the contract and tests.

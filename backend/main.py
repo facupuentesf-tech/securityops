@@ -12,12 +12,12 @@ from contextlib import asynccontextmanager, closing
 from datetime import datetime, timezone
 from getpass import fallback_getpass, getpass
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 
 DATABASE_PATH = Path(
@@ -83,7 +83,7 @@ def migrate_database() -> None:
 
 AuditAction = Literal["created", "status_changed", "note_created", "linked", "unlinked",
                       "assignee_changed", "role_changed", "deactivated", "reactivated",
-                      "password_reset", "user_updated"]
+                      "password_reset", "user_updated", "updated"]
 AuditResource = Literal["incident", "asset", "risk", "control", "user"]
 # Each event has an explicit allowlist; free text and credentials are never details.
 AUDIT_DETAIL_KEYS = {
@@ -95,6 +95,10 @@ AUDIT_DETAIL_KEYS = {
     "deactivated": {"previous_is_active", "new_is_active"},
     "reactivated": {"previous_is_active", "new_is_active"},
     "password_reset": set(), "user_updated": {"display_name_changed", "email_changed"},
+    "updated": {"name_changed", "title_changed", "description_changed",
+                "previous_type", "new_type", "previous_status", "new_status",
+                "previous_criticality", "new_criticality", "previous_probability", "new_probability",
+                "previous_impact", "new_impact", "previous_asset_id", "new_asset_id"},
 }
 
 
@@ -233,6 +237,33 @@ class AssetCreate(BaseModel):
     criticality: Literal["low", "medium", "high", "critical"]
 
 
+class PartialResourceUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    nullable_fields: ClassVar[set[str]] = {"description"}
+
+    @model_validator(mode="after")
+    def validate_changes(self):
+        if not self.model_fields_set:
+            raise ValueError("Provide fields to update")
+        if any(getattr(self, field) is None for field in self.model_fields_set - self.nullable_fields):
+            raise ValueError("Only optional fields accept null")
+        return self
+
+
+class AssetUpdate(PartialResourceUpdate):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] | None = None
+    description: str | None = None
+    type: Literal["hardware", "software", "service", "data"] | None = None
+    criticality: Literal["low", "medium", "high", "critical"] | None = None
+
+
+class ControlUpdate(PartialResourceUpdate):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] | None = None
+    description: str | None = None
+    type: Literal["preventive", "detective", "corrective"] | None = None
+    status: Literal["planned", "implemented", "retired"] | None = None
+
+
 class Asset(AssetCreate):
     model_config = ConfigDict(extra="ignore")
 
@@ -281,6 +312,16 @@ class RiskCreate(BaseModel):
     probability: int = Field(strict=True, ge=1, le=5)
     impact: int = Field(strict=True, ge=1, le=5)
     status: RiskStatus = "identified"
+    asset_id: int | None = Field(default=None, strict=True, gt=0)
+
+
+class RiskUpdate(PartialResourceUpdate):
+    nullable_fields: ClassVar[set[str]] = {"description", "asset_id"}
+    title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] | None = None
+    description: str | None = None
+    probability: int | None = Field(default=None, strict=True, ge=1, le=5)
+    impact: int | None = Field(default=None, strict=True, ge=1, le=5)
+    status: RiskStatus | None = None
     asset_id: int | None = Field(default=None, strict=True, gt=0)
 
 
@@ -760,6 +801,57 @@ def reset_user_password(
         connection.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
         record_audit(connection, actor, "password_reset", "user", user_id)
     return {"status": "ok"}
+
+
+def edit_resource(resource_type, resource_id, update, user):
+    # Identifiers and SELECTs are internal constants; values are always bound.
+    table, select = {
+        "asset": ("assets", "SELECT * FROM assets WHERE id = ? AND organization_id = ?"),
+        "risk": ("risks", RISK_SELECT + "WHERE r.id = ? AND r.organization_id = ?"),
+        "control": ("security_controls", "SELECT * FROM security_controls WHERE id = ? AND organization_id = ?"),
+    }[resource_type]
+    parameters = (resource_id, user["organization_id"])
+    with closing(connect()) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        previous = connection.execute(select, parameters).fetchone()
+        if previous is None:
+            raise HTTPException(status_code=404, detail=resource_type.capitalize() + " not found")
+        supplied = update.model_dump(exclude_unset=True)
+        if resource_type == "risk" and "asset_id" in supplied:
+            require_risk_asset(connection, supplied["asset_id"], user["organization_id"])
+        changes = {key: value for key, value in supplied.items() if previous[key] != value}
+        if changes:
+            assignments = ", ".join(field + " = ?" for field in changes)
+            connection.execute(f"UPDATE {table} SET {assignments} WHERE id = ? AND organization_id = ?",
+                               (*changes.values(), *parameters))
+            details = {}
+            for field, value in changes.items():
+                if field in {"name", "title", "description"}:
+                    details[field + "_changed"] = True
+                else:
+                    details["previous_" + field] = previous[field]
+                    details["new_" + field] = value
+            record_audit(connection, user, "updated", resource_type, resource_id, **details)
+        row = connection.execute(select, parameters).fetchone()
+    return public_risk(row) if resource_type == "risk" else dict(row)
+
+
+@app.patch("/assets/{asset_id}", response_model=Asset)
+def update_asset(asset_id: int, update: AssetUpdate,
+                 user: dict = Depends(require_roles("administrador", "analista"))):
+    return edit_resource("asset", asset_id, update, user)
+
+
+@app.patch("/risks/{risk_id}", response_model=Risk)
+def update_risk(risk_id: int, update: RiskUpdate,
+                user: dict = Depends(require_roles("administrador", "analista"))):
+    return edit_resource("risk", risk_id, update, user)
+
+
+@app.patch("/controls/{control_id}", response_model=SecurityControl)
+def update_control(control_id: int, update: ControlUpdate,
+                   user: dict = Depends(require_roles("administrador", "analista"))):
+    return edit_resource("control", control_id, update, user)
 
 
 @app.post("/controls", response_model=SecurityControl, status_code=201)

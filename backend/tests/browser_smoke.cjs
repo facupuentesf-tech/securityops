@@ -331,6 +331,69 @@ async function poll(fn) {
   }
   await evaluate(`(() => {const f=document.getElementById('user-create-form');f.elements.display_name.value='Smoke Reader';f.elements.email.value='smoke-reader@example.test';f.elements.password.value='smoke reader password';f.elements.role.value='lector';f.requestSubmit();})()`);
   await wait(`document.getElementById('user-list').textContent.includes('smoke-reader@example.test')`);
+  // Edit each resource, cancel, validate, retry and prevent repeated PATCH submissions.
+  for (const [kind, path, opener, titleField] of [['asset','assets','openAssetDetail','name'], ['risk','risks','openRiskDetail','title'], ['control','controls','openControlDetail','name']]) {
+    const original = await evaluate(`(async()=>{const resource=(await api('/${path}'))[0];window.editOriginal=resource;await ${opener}(resource.id);return resource;})()`);
+    await wait(`!document.getElementById('${kind}-edit-button').hidden`);
+    if (kind==='risk') await evaluate(`window.fetch=async(url,options)=>{if(url==='/assets')throw new TypeError('offline assets');return window.originalFetch(url,options);}`);
+    await evaluate(`document.getElementById('${kind}-edit-button').click()`);
+    if (kind==='risk') {
+      await wait(`document.getElementById('risk-edit-feedback').textContent.includes('conectar') && document.querySelector('#risk-edit-form button[type="submit"]').disabled`);
+      await evaluate(`document.getElementById('risk-edit-form').elements.description.value='Keep draft after retry';window.fetch=window.originalFetch;document.querySelector('#risk-edit-feedback button').click()`);
+      await wait(`!document.querySelector('#risk-edit-form button[type="submit"]').disabled`);
+      assert.equal(await evaluate(`document.getElementById('risk-edit-form').elements.description.value`),'Keep draft after retry');
+    }
+    await wait(`!document.getElementById('${kind}-edit-panel').hidden && !document.querySelector('#${kind}-edit-form button[type="submit"]').disabled`);
+    assert.equal(await evaluate(`document.getElementById('${kind}-edit-form').elements.${titleField}.value`),original[titleField]);
+    const beforeCancel = await evaluate(`(async()=> (await api('/audit-logs')).total)()`);
+    await evaluate(`document.getElementById('${kind}-edit-form').elements.${titleField}.value='Cancelled value';document.getElementById('${kind}-edit-cancel').click()`);
+    assert.equal(await evaluate(`document.getElementById('${kind}-edit-panel').hidden`),true);
+    assert.equal(await evaluate(`(async()=> (await api('/${path}/'+window.editOriginal.id)).${titleField})()`),original[titleField]);
+    assert.equal(await evaluate(`(async()=> (await api('/audit-logs')).total)()`),beforeCancel);
+    await evaluate(`document.getElementById('${kind}-edit-button').click()`);
+    await wait(`!document.querySelector('#${kind}-edit-form button[type="submit"]').disabled`);
+    await evaluate(`(()=>{const editForm=document.getElementById('${kind}-edit-form');editForm.elements.${titleField}.value='   ';editForm.dispatchEvent(new Event('submit',{cancelable:true}));})()`);
+    await wait(`document.getElementById('${kind}-edit-feedback').textContent.includes('vacío')`);
+    await evaluate(`document.getElementById('${kind}-edit-form').elements.${titleField}.value=${JSON.stringify(payload + ' edited')};window.fetch=async()=>{throw new TypeError('offline')};document.getElementById('${kind}-edit-form').requestSubmit()`);
+    await wait(`document.getElementById('${kind}-edit-feedback').textContent.includes('conectar') && !document.querySelector('#${kind}-edit-form button[type="submit"]').disabled`);
+    assert.equal(await evaluate(`document.getElementById('${kind}-edit-form').elements.${titleField}.value`),payload + ' edited');
+    await evaluate(`window.fetch=async(url,options)=>{if(url==='/'+${JSON.stringify(path)}+'/'+window.editOriginal.id && options?.method==='PATCH')return new Response('{}',{status:422,headers:{'Content-Type':'application/json'}});return window.originalFetch(url,options);};document.getElementById('${kind}-edit-form').requestSubmit()`);
+    await wait(`document.getElementById('${kind}-edit-feedback').textContent.includes('Revisá')`);
+    await evaluate(`(()=>{window.editPatchCount=0;window.fetch=async(url,options)=>{if(url==='/'+${JSON.stringify(path)}+'/'+window.editOriginal.id && options?.method==='PATCH')window.editPatchCount++;return window.originalFetch(url,options);};const f=document.getElementById('${kind}-edit-form');f.elements.description.value='';${kind === 'risk' ? "f.elements.probability.value='1';f.elements.impact.value='1';f.elements.status.value='accepted';f.elements.asset_id.value='';" : kind === 'asset' ? "f.elements.type.value='data';f.elements.criticality.value='low';" : "f.elements.status.value='retired';f.elements.type.value='corrective';"}f.requestSubmit();f.dispatchEvent(new Event('submit',{cancelable:true}));})()`);
+    await wait(`document.getElementById('${kind}-edit-panel').hidden && document.getElementById('${kind}-detail-${titleField}').textContent.endsWith(' edited')`);
+    assert.equal(await evaluate(`window.editPatchCount`),1);
+    assert.equal(await evaluate(`!document.querySelector('#${kind}-detail-content img') && !window.xss`),true);
+    const saved = await evaluate(`api('/${path}/'+window.editOriginal.id)`);
+    assert.equal(saved.description,null);
+    assert.equal(saved.created_at,original.created_at);
+    if (kind==='risk') {
+      assert.equal(saved.score,1);assert.equal(saved.level,'low');assert.equal(saved.asset_id,null);assert.equal(saved.assignee_id,original.assignee_id);
+      await evaluate(`document.getElementById('summary-nav').click()`);
+      await wait(`!document.getElementById('dashboard-content').hidden && document.querySelectorAll('#dashboard-risks a').length === 1`);
+      assert.equal(await evaluate(`document.getElementById('dashboard-cards').textContent.includes('Bajo: 2')`),true);
+      await evaluate(`document.getElementById('management-nav').click()`);
+      assert.equal(await evaluate(`!document.getElementById('risk-edit-button').hidden`),true);
+    }
+    await command('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+    await evaluate(`${opener}(window.editOriginal.id)`);
+    await wait(`!document.getElementById('${kind}-edit-button').hidden`);
+    await evaluate(`document.getElementById('${kind}-edit-button').click()`);
+    await wait(`!document.querySelector('#${kind}-edit-form button[type="submit"]').disabled`);
+    assert.equal(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`),true);
+    await evaluate(`document.getElementById('${kind}-edit-cancel').click();window.fetch=window.originalFetch;`);
+    // Restore through the editor, retaining existing smoke-test expectations.
+    await evaluate(`document.getElementById('${kind}-edit-button').click()`);
+    await wait(`!document.querySelector('#${kind}-edit-form button[type="submit"]').disabled`);
+    await evaluate(`(()=>{const f=document.getElementById('${kind}-edit-form');for(const key of ${JSON.stringify(kind==='risk' ? ['title','description','probability','impact','status','asset_id'] : kind==='asset' ? ['name','description','type','criticality'] : ['name','description','type','status'])})f.elements[key].value=window.editOriginal[key]??'';f.requestSubmit();})()`);
+    await wait(`document.getElementById('${kind}-edit-panel').hidden && document.getElementById('${kind}-detail-${titleField}').textContent === ${JSON.stringify(original[titleField])}`);
+    const beforeNoop = await evaluate(`(async()=> (await api('/audit-logs')).total)()`);
+    await evaluate(`document.getElementById('${kind}-edit-button').click()`);
+    await wait(`!document.querySelector('#${kind}-edit-form button[type="submit"]').disabled`);
+    await evaluate(`document.getElementById('${kind}-edit-form').requestSubmit()`);
+    await wait(`document.getElementById('${kind}-edit-panel').hidden && document.getElementById('message').textContent.includes('No hay cambios')`);
+    assert.equal(await evaluate(`(async()=> (await api('/audit-logs')).total)()`),beforeNoop);
+    await command('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
+  }
   // Summary navigation, safe details, automatic return refresh and manual update.
   await evaluate(`document.getElementById('summary-nav').click()`);
   await wait(`!document.getElementById('dashboard-content').hidden && document.querySelectorAll('#dashboard-incidents a').length === 1 && document.querySelectorAll('#dashboard-risks a').length === 2`);
@@ -443,7 +506,8 @@ async function poll(fn) {
   await evaluate(`document.querySelector('.control-name').click()`);
   await wait(`!document.getElementById('control-detail-content').hidden`);
   assert.equal(await evaluate(`document.getElementById('control-detail-name').textContent`),payload);
-  console.log('OK: resumen (navegación, actualización, enlaces, carga/error/reintento, permisos, fechas y móvil), auditoría (permisos, filtros, paginación, carga/error/vacío, XSS, fechas y móvil), login/logout, administración de usuarios, lector, responsables, limpieza de asignaciones, incidentes, activos, riesgos, controles, vínculos, historial, notas, filtros, XSS, fechas locales, errores de red, /docs y anchos 1280/390.');
+  assert.equal(await evaluate(`['asset','risk','control'].every(kind=>document.getElementById(kind+'-edit-button').hidden && document.getElementById(kind+'-edit-panel').hidden)`),true);
+  console.log('OK: edición (guardar/cancelar, parcial/null, recálculo, errores/reintento, envíos repetidos, permisos y móvil), resumen (navegación, actualización, enlaces, carga/error/reintento, permisos, fechas y móvil), auditoría (permisos, filtros, paginación, carga/error/vacío, XSS, fechas y móvil), login/logout, administración de usuarios, lector, responsables, limpieza de asignaciones, incidentes, activos, riesgos, controles, vínculos, historial, notas, filtros, XSS, fechas locales, errores de red, /docs y anchos 1280/390.');
   await command('Browser.close');
 })().catch(error => { console.error(error);process.exitCode=1; }).finally(async () => {
   if(socket && socket.readyState===WebSocket.OPEN) {

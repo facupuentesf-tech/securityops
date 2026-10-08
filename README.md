@@ -25,6 +25,7 @@ compartido.
 - Crear, listar y consultar controles de seguridad y vincularlos con riesgos.
 - Vincular varios activos por incidente y quitar vínculos sin borrar recursos.
 - Crear, listar y consultar activos, con filtros por tipo y criticidad combinados con AND.
+- Editar activos, riesgos y controles como administrador o analista, con auditoría atómica.
 - Filtrar por estado y severidad, individualmente o combinados.
 - Cambiar el estado y consultar su historial persistente.
 - Agregar y consultar notas de investigación.
@@ -51,12 +52,15 @@ compartido.
 | Crear incidentes, cambiar estado y agregar notas | Sí | Sí | No |
 | Consultar activos | Sí | Sí | Sí |
 | Crear activos | Sí | Sí | No |
+| Editar activos | Sí | Sí | No |
 | Consultar riesgos | Sí | Sí | Sí |
 | Crear riesgos | Sí | Sí | No |
+| Editar riesgos | Sí | Sí | No |
 | Consultar responsables y candidatos elegibles | Sí | Sí | Sí |
 | Asignar, reasignar y quitar responsables | Sí | No | No |
 | Consultar controles y vínculos con riesgos | Sí | Sí | Sí |
 | Crear controles, vincular y desvincular | Sí | Sí | No |
+| Editar controles | Sí | Sí | No |
 | Vincular y desvincular activos de incidentes | Sí | Sí | No |
 | Gestionar usuarios (crear, editar, desactivar y restablecer contraseña) | Sí | No | No |
 | Consultar auditoría de la organización | Sí | No | No |
@@ -70,9 +74,9 @@ su contraseña.
 
 Aún no están implementados:
 
-- Edición, eliminación y asignación de responsables de activos
-- Edición y eliminación de riesgos y evaluación residual
-- Edición y eliminación de controles de seguridad, evaluación de eficacia
+- Eliminación y asignación de responsables de activos
+- Eliminación de riesgos y evaluación residual
+- Eliminación de controles de seguridad, evaluación de eficacia
 - Eventos de auditoría de autenticación (login, logout, rechazos y expiración)
 - Reportes
 - Extensiones del dashboard y métricas adicionales
@@ -100,7 +104,7 @@ El nombre es obligatorio, se recorta y no puede quedar vacío. Tipos admitidos:
 `critical`. La descripción es opcional: omitida o null se almacena como null.
 El servidor asigna ID, organización y fecha UTC. Los campos extra, incluido
 `organization_id`, y los filtros inválidos devuelven `422`. Sin coincidencias,
-el listado devuelve `[]`. No hay edición ni eliminación de activos.
+el listado devuelve `[]`. La edición parcial está implementada; la eliminación sigue pendiente.
 
 Para comprobarlo manualmente:
 
@@ -413,8 +417,8 @@ locales y controles de creación ocultos para lectores.
 ## Estado
 
 Prototipo funcional local con autenticación, permisos y aislamiento entre
-organizaciones, con creación y consulta de activos. Edición y eliminación de
-activos, edición y eliminación de riesgos y controles, auditoría de autenticación,
+organizaciones, con creación, consulta y edición de activos, riesgos y controles. Eliminación de
+recursos, auditoría de autenticación,
 reportes y métricas adicionales continúan pendientes. El resumen inicial está implementado.
 
 ## Activos afectados por incidente
@@ -455,7 +459,7 @@ Comprobación manual:
 La sección **Riesgos** permite crear, listar, filtrar y consultar riesgos de la
 organización autenticada. Administrador y analista pueden crear; lector solo
 consulta. Cada riesgo puede asociarse a un activo de la misma organización o
-registrarse sin activo. Edición, eliminación y evaluación residual
+registrarse sin activo. Eliminación y evaluación residual
 quedan para una etapa posterior.
 
 | Método | Ruta | Comportamiento |
@@ -562,7 +566,7 @@ propios que todavía no estén vinculados. Quitar el vínculo conserva riesgo y
 control, y permite seleccionarlo otra vez. La asociación documenta una medida:
 **no cambia automáticamente el puntaje o nivel ni demuestra la eficacia del
 control**. Se pueden documentar controles planificados, implementados o retirados.
-Evaluación residual, edición y eliminación de controles quedan pendientes.
+Evaluación residual y eliminación de controles quedan pendientes.
 
 Comprobación manual:
 
@@ -728,3 +732,31 @@ la fecha local de actualización. Incluye mensajes de carga/error/vacío,
 **Reintentar**, renderizado seguro y diseño adaptable. No requiere migración nueva
 ni modifica datos. Contrato de API, pruebas y pasos manuales:
 [docs/dashboard.md](docs/dashboard.md).
+
+
+## Edición parcial de activos, riesgos y controles
+
+Administradores y analistas pueden usar **Editar** en cada detalle. Formularios
+precargados permiten guardar o cancelar, muestran errores y bloquean envíos
+repetidos. Los lectores solo consultan. Guardar refresca detalle/listado; volver
+a Resumen actualiza el dashboard.
+
+- `PATCH /assets/{asset_id}`: nombre, descripción, tipo y criticidad.
+- `PATCH /risks/{risk_id}`: título, descripción, probabilidad, impacto, estado y activo asociado.
+- `PATCH /controls/{control_id}`: nombre, descripción, tipo y estado.
+
+Los campos omitidos se conservan. Cuerpos vacíos, campos desconocidos y valores
+inválidos reciben `422`. Null solo se admite en descripción y en `asset_id` del
+riesgo (quita la asociación). Los PATCH no modifican ID, organización, fecha de
+creación ni responsable. El servidor valida permisos, organización y CSRF;
+recursos/activos asociados inexistentes o ajenos reciben `404`. Recalcula puntaje
+y nivel del riesgo y conserva vínculos. Implementar un control no reduce el puntaje.
+
+La migración 010 permite la acción de auditoría `updated`, conservando eventos,
+IDs y secuencias. Edición y evento comparten transacción; un fallo revierte todo.
+No se generan eventos sin cambios efectivos. Para textos solo se registran
+indicadores de campos cambiados; para valores y asociaciones, valores/IDs
+anteriores y nuevos. No se implementa eliminación.
+
+Contrato, migración, pruebas y pasos manuales:
+[docs/resource-edits.md](docs/resource-edits.md).

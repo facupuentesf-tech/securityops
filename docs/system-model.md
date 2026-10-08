@@ -37,7 +37,7 @@ type (`hardware`, `software`, `service`, `data`), optional description,
 criticality (`low`, `medium`, `high`, `critical`) and UTC creation timestamp.
 Administrators and analysts create assets; all authenticated roles can list,
 filter and view details. Type and criticality filters combine with AND.
-Editing, deletion, ownership assignment are future work.
+Deletion and ownership assignment are future work; partial editing is implemented.
 
 An **account** has a display name, unique email, scrypt password hash, active
 flag, exactly one of three roles and belongs to one organization. Administrators
@@ -187,7 +187,7 @@ A risk records a potential security event in one organization. It has an ID,
 trimmed nonempty title, optional description, integer probability and impact
 from 1 to 5, status identified/treating/accepted and UTC creation time.
 The initial status defaults to identified; the current module only creates
-and reads records, with no status updates or other editing/deletion.
+and reads records, with partial editing implemented by the PATCH endpoint; deletion remains deferred.
 
 A risk may reference zero or one asset in the same organization; an asset may
 have multiple risks. Server validation and composite foreign keys both enforce
@@ -207,8 +207,7 @@ Risks and controls have a many-to-many relationship within the same organization
 Each pair appears at most once. Linking and unlinking do not alter either resource
 or any other relationship. All control states may be associated to document the
 measure's current state. The association alone neither changes initial risk score
-and level nor proves efficacy. No residual assessment, control editing or control
-deletion is implemented.
+and level nor proves efficacy. No residual assessment, control deletion is implemented.
 
 ## Optional responsible users
 
@@ -261,3 +260,24 @@ automatic refresh on return, manual refresh, loading/error/retry/empty feedback
 and responsive accessible layouts are provided. No schema migration or data
 writes are needed. See [dashboard.md](dashboard.md) for the response contract,
 consistent-read test and API/browser/manual verification.
+
+
+## Partial resource editing (implemented, migration 010)
+
+Administrator/analyst PATCH routes on assets, risks and controls accept only
+editable fields, preserve omitted values and reject empty bodies, unknown or
+protected fields and invalid values with 422. Null is limited to descriptions
+and the optional risk asset_id. Missing/foreign resources and associated assets
+return 404. Authenticated organization/actor and CSRF checks come from the server.
+Risk score/level are recalculated; assignees, creation dates and many-to-many
+links are preserved. Implementing a control never reduces risk score automatically.
+
+Effective changes and one minimal updated audit event share BEGIN IMMEDIATE and
+a transaction; audit insertion failure rolls back the edit. Text details are
+field-change flags, other details are previous/new enum/number/ID values. No-op
+or failed requests generate no events. Migration 010 extends the audit action
+CHECK while preserving events, indexes and ID high-water marks; no business data
+is rewritten. The safe responsive UI offers role-protected prefilled forms,
+save/cancel, validation/error feedback and duplicate-submit guards. Detail/list
+refresh after save and Resumen refreshes on return. Resource deletion is not
+implemented. See [resource-edits.md](resource-edits.md) for the contract and tests.
