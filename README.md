@@ -10,9 +10,10 @@ controles de seguridad e incidentes en una única plataforma.
 ## Primera versión funcional
 
 Aplicación local para registrar e investigar incidentes de seguridad, con
-inicio de sesión y permisos verificados por la API. El servidor escucha
-únicamente en `127.0.0.1`; esta versión no incluye publicación ni despliegue
-para uso compartido. Solo contempla una organización.
+inicio de sesión, permisos verificados por la API y aislamiento de datos entre
+organizaciones. El servidor escucha únicamente en `127.0.0.1`; esta versión
+sigue siendo un prototipo local, sin publicación ni despliegue para uso
+compartido.
 
 ### Funciones implementadas
 
@@ -26,6 +27,8 @@ para uso compartido. Solo contempla una organización.
   nombre/correo/rol, desactivar cuentas y restablecer contraseñas.
 - Tres roles comprobados en cada operación del backend: administrador,
   analista y lector.
+- Organizaciones locales con usuarios e incidentes aislados por organización;
+  el servidor obtiene la organización desde la sesión autenticada.
 - Historial de estados y notas nuevos atribuidos al usuario que los generó.
 - Interfaz en español adaptable a computadora y celular, con fechas locales
   y mensajes de carga, listas vacías, éxito y errores.
@@ -49,7 +52,6 @@ su contraseña.
 
 Aún no están implementados:
 
-- Soporte para varias organizaciones y aislamiento de datos por organización
 - Inventario de activos
 - Gestión de riesgos
 - Controles de seguridad
@@ -84,9 +86,9 @@ El entorno virtual mantiene las dependencias aisladas del resto del equipo.
 Los comandos usan su ejecutable directamente, por lo que no hace falta activar
 el entorno ni cambiar la política de ejecución de PowerShell.
 
-Antes de iniciar la aplicación por primera vez, crear el primer administrador.
-El comando solicita correo, nombre y una contraseña nueva dos veces; no hay
-credenciales predeterminadas ni endpoint de registro público:
+Antes de iniciar la aplicación por primera vez, crear la primera organización
+y su administrador. El comando solicita correo, nombre y una contraseña nueva
+dos veces; no hay credenciales predeterminadas ni endpoint de registro público:
 
 ```powershell
 .\backend\.venv\Scripts\python.exe backend\main.py create-admin
@@ -94,6 +96,19 @@ credenciales predeterminadas ni endpoint de registro público:
 
 El comando aplica las migraciones pendientes sin borrar los registros existentes.
 Solo puede crear este administrador inicial cuando la base no contiene usuarios.
+Para crear otra organización y su primer administrador en una base ya inicializada,
+usar el siguiente comando local. Solicita el nombre de la organización y los
+datos del administrador, incluida una contraseña nueva dos veces:
+
+```powershell
+.\backend\.venv\Scripts\python.exe backend\main.py create-organization
+```
+
+La asociación de usuarios e incidentes se deriva del usuario autenticado y no
+se puede establecer ni modificar desde la API. Los administradores solo ven y
+gestionan usuarios de su organización; IDs de otras organizaciones responden
+`404`. La base existente se migra a una organización inicial, conservando
+usuarios, sesiones vigentes, incidentes, historial y notas.
 Para usar otra ubicación de base SQLite, definir `SECURITYOPS_DATABASE` antes
 de ejecutar tanto este comando como Uvicorn, por ejemplo:
 
@@ -268,16 +283,14 @@ y agregarlas no modifica el incidente ni su historial de estados.
 ## Migraciones y alcance organizacional
 
 Las migraciones numeradas viven en `backend/migrations` y se aplican en orden
-al iniciar la API o al ejecutar `create-admin`. La primera versión crea el
-esquema de incidentes solo si aún no existe; la siguiente agrega usuarios,
-sesiones y atribución opcional a historial/notas. No elimina ni reconstruye las
-tablas con información existente. Antes de actualizar, se recomienda detener
-la API y hacer una copia de la base activa antes de actualizar.
+al iniciar la API o al ejecutar cualquiera de los comandos locales. La migración
+003 agrega organizaciones y asocia los datos existentes a la organización inicial
+sin borrar tablas ni invalidar sesiones vigentes. Antes de actualizar, detener
+la API y hacer una copia de la base activa.
 
-Esta etapa trabaja con una sola organización local y no incorpora una entidad
-de organización ni filtros de acceso multi-organización. El soporte multi-tenant
-y el aislamiento entre organizaciones quedan pendientes; no se debe exponer esta
-versión como servicio compartido.
+El aislamiento multi-organización se implementa en esta etapa, pero la aplicación
+sigue siendo un prototipo local que escucha en `127.0.0.1`; no se debe exponer
+como servicio compartido.
 
 ## Pruebas automatizadas
 
@@ -297,6 +310,9 @@ migraciones versionadas y preservación de incidentes, historial y notas existen
 cuando falla la escritura del historial, rechazo de usuarios anónimos,
 protección CSRF, permisos de los tres roles, administración de usuarios,
 restablecimiento de contraseñas y protección del último administrador activo.
+También cubren migración conservando sesiones y datos existentes, creación local
+de otra organización y aislamiento de lecturas, filtros, escrituras e
+administración de usuarios entre organizaciones.
 Para notas cubren creación, recorte del contenido, límites de longitud, validaciones, listado,
 orden cronológico y desempate por ID, `404`, persistencia tras reiniciar y
 creación de la tabla conservando incidentes e historial existentes.
@@ -333,6 +349,6 @@ una revisión manual en un celular físico.
 
 ## Estado
 
-Versión funcional local con autenticación y permisos para una organización.
-El soporte multi-organización y los demás módulos del proyecto continúan
-pendientes.
+Prototipo funcional local con autenticación, permisos y aislamiento entre
+organizaciones. Activos, riesgos, controles, auditoría general, reportes y
+dashboard continúan pendientes.

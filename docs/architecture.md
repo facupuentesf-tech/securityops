@@ -2,10 +2,11 @@
 
 ## Overview
 
-SecurityOps is a local, single-organization web application. One Uvicorn process
-hosts FastAPI, serves the HTML/CSS/JavaScript interface and exposes the JSON API.
-The backend uses SQLite through Python's `sqlite3`; there is no separate frontend
-server or external database service.
+SecurityOps is a local, multi-organization web application with server-enforced
+tenant isolation. One Uvicorn process hosts FastAPI, serves the
+HTML/CSS/JavaScript interface and exposes the JSON API. The backend uses SQLite
+through Python's `sqlite3`; there is no separate frontend server or external
+database service.
 
 ## Architecture
 
@@ -28,8 +29,9 @@ FastAPI (backend/main.py)
        | sqlite3, bound query parameters, SQL migrations
        v
 SQLite database (default: backend/securityops.db)
+       |-- organizations, users, sessions
        |-- incidents, incident_status_history, incident_notes
-       |-- users, sessions, schema_migrations
+       |-- schema_migrations
 ```
 
 ## Authentication and Authorization
@@ -54,10 +56,18 @@ run in FastAPI dependencies for every protected API operation:
 
 `POST /auth/login` is the only public account operation. The initial
 administrator is created through the interactive local command
-`python backend/main.py create-admin`; no default password or public signup
-exists. The root page and static assets are public so the login UI can load.
+`python backend/main.py create-admin`; further organizations and their first
+administrators are bootstrapped with
+`python backend/main.py create-organization`. Both prompt for new passwords;
+no default password or public signup exists. The root page and static assets are
+public so the login UI can load.
 `/health` and `/docs` are also public; protected business data and operations
 are not.
+
+The authenticated user's `organization_id`, loaded from the user row on every
+request, supplies the tenant scope. The API never accepts an organization ID
+for users or incidents, and administrator user-management operations are
+restricted to that organization. Cross-organization identifiers return `404`.
 
 ## Frontend
 
@@ -69,8 +79,9 @@ renders user-provided content with `textContent`.
 The interface hides actions unavailable to a role for clarity, but this is not
 the security boundary: FastAPI enforces the same permissions independently.
 UTC timestamps are displayed in the browser's timezone. Administrators can
-create users, change display name/email/role, deactivate accounts and reset
-passwords.
+create users in their own organization, change display name/email/role,
+deactivate accounts and reset passwords. Organization associations cannot be
+changed through the API.
 
 ## API
 
@@ -104,17 +115,19 @@ Connections enable foreign keys and close after use.
 Numbered SQL files in `backend/migrations` are applied in order and recorded in
 `schema_migrations`. Migration 001 creates the incident schema if absent.
 Migration 002 adds users, sessions and nullable actor references for status
-history and notes. The upgrade preserves existing incident information and
-does not invent actors for historical records. Status changes and their history
-entries remain atomic; concurrent writers are serialized with `BEGIN IMMEDIATE`.
+history and notes. Migration 003 creates the initial organization and assigns
+existing users and incidents to it without replacing rows; existing sessions,
+password hashes, history and notes remain intact. Organization columns are
+required by database triggers and foreign keys. The upgrade does not invent
+actors for historical records. Status changes and their history entries remain
+atomic; concurrent writers are serialized with `BEGIN IMMEDIATE`.
 
 ## Local Scope and Security Boundaries
 
-This release is for one local organization and binds to `127.0.0.1`. It does
-not have organization records, tenant isolation, shared deployment
-configuration, rate limiting or a general audit log. Multi-organization
-support must include explicit tenant scoping before any shared deployment.
-It is not safe to expose this local prototype to an untrusted network.
+This release supports isolated organization records but still binds to
+`127.0.0.1`. It does not provide shared deployment configuration, rate limiting
+or a general audit log. It is not safe to expose this local prototype to an
+untrusted network.
 
 ## Verification and Future Work
 
@@ -123,6 +136,5 @@ database, including authentication, permissions, migration of legacy data,
 incident workflows and session persistence. An optional Node.js/Chrome smoke
 test exercises the authenticated interface at desktop and mobile widths.
 
-Assets, risks, controls, tenant isolation, general audit logs, reports and
-dashboards remain future work. React, PostgreSQL and Docker are possible later
-choices.
+Assets, risks, controls, general audit logs, reports and dashboards remain
+future work. React, PostgreSQL and Docker are possible later choices.

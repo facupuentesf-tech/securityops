@@ -3,8 +3,8 @@
 ## Implemented Requirements
 
 The current application runs locally and uses HTML/CSS/JavaScript, FastAPI
-and SQLite. It supports a single organization, local authentication and
-backend-enforced role-based permissions.
+and SQLite. It supports multiple isolated organizations, local authentication
+and backend-enforced role-based permissions.
 
 ### Authentication and User Management
 
@@ -19,11 +19,22 @@ backend-enforced role-based permissions.
 - State-changing requests using an authenticated session require its
   `X-CSRF-Token`; the backend rejects a missing or invalid token with `403`.
 - An administrator can list, create and update users, deactivate accounts and
-  reset passwords. User creation is not public. At least one active
-  administrator must remain; an account cannot deactivate itself.
+  reset passwords only within their own organization. User creation is not
+  public. At least one active administrator per organization must remain; an
+  account cannot deactivate itself.
 - The first administrator is created only with the local interactive
   `python backend/main.py create-admin` command, and only when no user exists.
   It prompts for a new password; there are no default credentials.
+- `python backend/main.py create-organization` interactively creates an
+  organization and its first administrator in one transaction. It prompts for
+  organization name, account details and a new password; it does not provide
+  default credentials or a public registration route.
+- Every user and incident belongs to an organization. The server derives the
+  organization from the authenticated account; request payloads cannot set or
+  change the association. Incident list/filter/detail/status/history/note
+  operations and user administration are scoped to that organization.
+- Identifiers belonging to another organization return `404`, just like
+  nonexistent identifiers.
 - Roles are singular and fixed to `administrador`, `analista` and `lector`.
   Administrators manage users and perform all incident operations. Analysts
   read/create incidents, change status and add notes. Readers can only read
@@ -40,7 +51,8 @@ backend-enforced role-based permissions.
 - Severity values: `low`, `medium`, `high`, `critical`.
 - Status values: `open`, `investigating`, `resolved`.
 - `GET /incidents` returns incidents ordered by ID, with optional `status`
-  and `severity` filters combined with AND. No matches returns `[]`.
+  and `severity` filters combined with AND within the authenticated user's
+  organization. No matches returns `[]`.
 - `GET /incidents/{incident_id}` returns the incident or `404`.
 - `PATCH /incidents/{incident_id}/status` requires a valid non-null status,
   updates only that field and returns the updated incident.
@@ -69,14 +81,18 @@ backend-enforced role-based permissions.
 - The interface communicates loading, empty results, success and errors.
 - SQLite data survives server restarts. Numbered SQL migrations preserve
   existing incidents, history and notes; prior activity remains unattributed.
+- Migration 003 assigns existing users and incidents to the initial
+  organization while preserving account hashes, active sessions and incident
+  records.
   The local path can be overridden with `SECURITYOPS_DATABASE`.
 - Queries with input use bound SQL parameters. `/docs` remains available.
 - Automated tests use temporary databases.
 
 ## Original Requirements: Future Work
 
-Multi-organization support and isolation are pending; the implemented roles and
-accounts currently operate within this one local organization.
+Assets, risks, controls, general audit logs and shared deployment remain
+future work. Multi-organization data isolation is implemented, but this remains
+a local prototype bound to `127.0.0.1` and is not intended for shared deployment.
 
 ### 1. Assets
 
@@ -121,5 +137,5 @@ Each incident should have:
 
 Description, severity, status and date are implemented. Responsible-person
 assignment and links to assets remain planned extensions. General audit logs,
-multi-organization support, reports, dashboards and security
-documentation management also remain future work.
+reports, dashboards and security documentation management also remain future
+work. Multi-organization isolation is implemented; shared deployment is not.

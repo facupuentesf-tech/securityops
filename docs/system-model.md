@@ -33,10 +33,18 @@ persistent in SQLite; existing incidents without entries return empty lists.
 History is ordered by ID, and notes by creation time with ID as a tiebreaker.
 
 An **account** has a display name, unique email, scrypt password hash, active
-flag and exactly one of three roles. Administrators create and manage accounts;
-there is no public registration. A first administrator is bootstrapped only by
-the local interactive command `python backend/main.py create-admin`, before
-any user exists.
+flag, exactly one of three roles and belongs to one organization. Administrators
+create and manage accounts only in their own organization; there is no public
+registration. The initial administrator is bootstrapped with
+`python backend/main.py create-admin`, before any user exists. Additional
+organizations and their initial administrators are created locally with
+`python backend/main.py create-organization`.
+
+An **organization** owns its users and incidents. The authenticated user's
+organization is loaded by the server from the account record on each request;
+the client cannot choose or change it. Incident list/filter/detail/status,
+history, notes and user administration are all organization-scoped. Attempts
+to access identifiers belonging to another organization return `404`.
 
 An **authenticated session** is represented by a random opaque token held in an
 `HttpOnly`, `SameSite=Strict` cookie. SQLite stores only its SHA-256 digest and
@@ -54,19 +62,19 @@ The implemented role permissions are:
 
 The HTML/CSS/JavaScript interface is in Spanish, calls the FastAPI API and
 formats dates in the browser's timezone. UI visibility reflects role
-permissions, but access is enforced by the backend. The deployment is local
-and supports one organization; no tenant isolation is implemented.
+permissions, but access is enforced by the backend. The prototype supports
+multiple isolated organizations while remaining local; it is not configured
+for shared deployment.
 
 ## Original Domain Vision: Future Work
 
 The following entities and relationships preserve the original vision.
-Organizations/multi-tenancy, assets, risks, controls and general audit logs are
-not yet implemented. Responsible users and asset links for incidents are also
-future work.
+Assets, risks, controls and general audit logs are not yet implemented.
+Responsible users and asset links for incidents are also future work.
 
 The planned domain entities are:
 
-- Organizations / tenant isolation
+- Organizations / tenant isolation (implemented for users and incidents)
 - Assets
 - Risks
 - Security Controls

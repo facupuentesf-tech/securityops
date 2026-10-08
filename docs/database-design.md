@@ -6,9 +6,22 @@ The local version uses SQLite, by default at `backend/securityops.db`. The
 default path is relative to the backend module and can be overridden with
 `SECURITYOPS_DATABASE`. Numbered SQL migrations in `backend/migrations` are
 tracked in `schema_migrations`; database files are excluded from Git.
-Migrations 001 and 002 preserve the existing incident, history and note data.
+Migrations 001–003 preserve existing incident, history, note, user and session
+data while assigning existing users and incidents to the initial organization.
 
 ## Implemented Schema
+
+### organizations
+
+| Field | SQLite type | Constraints and meaning |
+| --- | --- | --- |
+| `id` | INTEGER | Primary key, autoincrement |
+| `name` | TEXT | Required, unique case-insensitively, 1–120 trimmed characters |
+| `created_at` | TEXT | Required, UTC creation timestamp |
+
+Migration 003 creates `Organización inicial` and associates all pre-existing
+users and incidents with it. The local `create-organization` command creates
+additional organizations together with their first administrator.
 
 ### incidents
 
@@ -20,11 +33,14 @@ Migrations 001 and 002 preserve the existing incident, history and note data.
 | `severity` | TEXT | Required: `low`, `medium`, `high`, `critical` |
 | `status` | TEXT | Required: `open`, `investigating`, `resolved` |
 | `created_at` | TEXT | Required, application-generated UTC ISO 8601 timestamp |
+| `organization_id` | INTEGER | Required foreign key to `organizations.id` |
 
 The API rejects title/description values containing only whitespace. Status
 defaults to `open` in the creation model when omitted; this is not a database
 column default. Lists are ordered by `id` ascending. Optional status and severity
 filters use equality conditions combined with AND and bound SQL parameters.
+Every list, filter and detail lookup also requires the authenticated user's
+organization ID, which is supplied by the server rather than the request.
 
 ### incident_status_history
 
@@ -71,11 +87,14 @@ does not modify incident fields or status history.
 | `role` | TEXT | Required: `administrador`, `analista` or `lector` |
 | `is_active` | INTEGER | Required boolean, defaults to 1 |
 | `created_at` | TEXT | Required, application-generated UTC ISO 8601 timestamp |
+| `organization_id` | INTEGER | Required foreign key to `organizations.id` |
 
-One role is stored directly on each user. User records are not yet related to
-an organization because this stage supports one local organization only.
-Accounts are created by an administrator or the interactive initial-admin
-command; no public signup exists. At least one active administrator must remain.
+One role is stored directly on each user. The server derives the user's
+organization from the authenticated session. Administrators can create and
+manage accounts only in that organization; API requests cannot set or change
+the association. Accounts are created by an administrator or by a local
+interactive bootstrap command; no public signup exists. At least one active
+administrator must remain in each organization.
 
 ### sessions
 
@@ -95,8 +114,10 @@ all sessions for that user.
 
 Stores each applied migration version and its UTC application timestamp.
 Migration 001 creates incident tables and indexes if absent. Migration 002
-creates users/sessions and adds nullable actor foreign keys. Each migration runs
-in a transaction and is applied only once.
+creates users/sessions and adds nullable actor foreign keys. Migration 003
+creates organizations, assigns old users/incidents to the initial organization
+and adds organization indexes and required-association triggers. Each migration
+runs in a transaction and is applied only once.
 
 ### Relationships and Persistence
 
@@ -111,38 +132,28 @@ browser's timezone. Incident, history and note data survive server restarts.
 
 ## Domain entities still planned
 
-Organizations, assets, risks, controls and general audit logs remain future
-work. Multi-organization support and tenant isolation are not implemented.
-Proposed incident fields such as `company_id`, `asset_id` and `assigned_to`
+Assets, risks, controls and general audit logs remain future work.
+Multi-organization isolation is implemented for the current incident and user
+operations. Proposed incident fields such as `asset_id` and `assigned_to`
 are not columns in the current `incidents` table. PostgreSQL remains a possible
 later database.
 
 The planned entities are:
 
-- Companies (future multi-organization support)
+- Organizations (implemented)
 - Assets
 - Risks
 - Security Controls
 - Audit Logs
 
-### Companies
-
-Represents an organization using SecurityOps.
-
-Main fields:
-
-- id
-- name
-- created_at
-
 ### Assets
 
-Represents technological resources belonging to a company.
+Represents technological resources belonging to an organization.
 
 Main fields:
 
 - id
-- company_id
+- organization_id
 - name
 - type
 - description
@@ -152,12 +163,12 @@ Main fields:
 
 ### Risks
 
-Represents potential security risks.
+Represents potential security risks within an organization.
 
 Main fields:
 
 - id
-- company_id
+- organization_id
 - asset_id
 - title
 - description
@@ -170,12 +181,12 @@ Main fields:
 
 ### Security Controls
 
-Represents security measures used to reduce risks.
+Represents security measures used to reduce risks in an organization.
 
 Main fields:
 
 - id
-- company_id
+- organization_id
 - name
 - description
 - status
@@ -184,12 +195,12 @@ Main fields:
 
 ### Incidents (Planned Extensions)
 
-Represents security incidents.
+Represents future incident extensions within an organization.
 
 Main fields:
 
 - id
-- company_id
+- organization_id
 - asset_id
 - title
 - description
@@ -205,7 +216,7 @@ Records important actions performed within the platform.
 Main fields:
 
 - id
-- company_id
+- organization_id
 - user_id
 - action
 - entity_type

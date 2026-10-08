@@ -11,7 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
-from http.cookiejar import CookieJar
+from http.cookiejar import Cookie, CookieJar
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPCookieProcessor, build_opener
 from urllib.parse import urlencode
@@ -67,8 +67,9 @@ class IncidentTests(unittest.TestCase):
     def seed_admin(self):
         with closing(sqlite3.connect(self.database)) as connection, connection:
             connection.execute(
-                "INSERT INTO users (display_name, email, password_hash, role, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO users "
+                "(display_name, email, password_hash, role, created_at, organization_id) "
+                "VALUES (?, ?, ?, ?, ?, 1)",
                 (
                     "Test Administrator",
                     "admin@example.test",
@@ -441,7 +442,15 @@ class IncidentTests(unittest.TestCase):
         with closing(sqlite3.connect(self.database)) as connection:
             self.assertEqual(
                 connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall(),
-                [(1,), (2,)],
+                [(1,), (2,), (3,)],
+            )
+            self.assertEqual(
+                connection.execute("SELECT organization_id FROM incidents WHERE id = 17").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute("SELECT organization_id FROM users WHERE email = 'admin@example.test'").fetchone()[0],
+                1,
             )
             self.assertEqual(
                 connection.execute("SELECT changed_by FROM incident_status_history WHERE id = 8").fetchone()[0],
@@ -618,6 +627,15 @@ class IncidentTests(unittest.TestCase):
         database = Path(self.directory.name) / "bootstrap.db"
         environment = os.environ.copy()
         environment["SECURITYOPS_DATABASE"] = str(database)
+        premature_organization = subprocess.run(
+            [sys.executable, str(BACKEND / "main.py"), "create-organization"],
+            text=True,
+            capture_output=True,
+            env=environment,
+            timeout=30,
+        )
+        self.assertEqual(premature_organization.returncode, 1)
+        self.assertIn("Creá primero un administrador", premature_organization.stderr)
         result = subprocess.run(
             [sys.executable, str(BACKEND / "main.py"), "create-admin"],
             input=(
@@ -647,6 +665,329 @@ class IncidentTests(unittest.TestCase):
             timeout=30,
         )
         self.assertEqual(duplicate.returncode, 1)
+
+    def test_organization_migration_preserves_users_sessions_and_incident_data(self):
+        self.stop_server()
+        self.database.unlink()
+        token = "existing-session-token"
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        expires_at = int(time.time()) + 3600
+        existing_password_hash = app_main.hash_password("existing account password")
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.executescript("""
+                CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL
+                );
+                INSERT INTO schema_migrations VALUES (1, '2026-01-01T00:00:00+00:00');
+                INSERT INTO schema_migrations VALUES (2, '2026-01-01T00:00:00+00:00');
+                CREATE TABLE incidents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE incident_status_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    incident_id INTEGER NOT NULL REFERENCES incidents(id),
+                    previous_status TEXT NOT NULL,
+                    new_status TEXT NOT NULL,
+                    changed_at TEXT NOT NULL,
+                    changed_by INTEGER REFERENCES users(id)
+                );
+                CREATE TABLE incident_notes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    incident_id INTEGER NOT NULL REFERENCES incidents(id),
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    created_by INTEGER REFERENCES users(id)
+                );
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    display_name TEXT NOT NULL,
+                    email TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE sessions (
+                    token_hash TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    csrf_token TEXT NOT NULL,
+                    expires_at INTEGER NOT NULL
+                );
+                INSERT INTO incidents VALUES
+                    (17, 'Legacy incident', 'Existing description', 'high', 'investigating', '2026-01-01T00:00:00+00:00');
+                INSERT INTO incident_status_history
+                    (id, incident_id, previous_status, new_status, changed_at)
+                    VALUES (8, 17, 'open', 'investigating', '2026-01-02T00:00:00+00:00');
+                INSERT INTO incident_notes
+                    (id, incident_id, content, created_at)
+                    VALUES (9, 17, 'Legacy note', '2026-01-03T00:00:00+00:00');
+            """)
+            connection.execute(
+                "INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    4,
+                    "Existing Administrator",
+                    "existing-admin@example.test",
+                    existing_password_hash,
+                    "administrador",
+                    1,
+                    "2026-01-01T00:00:00+00:00",
+                ),
+            )
+            connection.execute(
+                "INSERT INTO sessions VALUES (?, ?, ?, ?)",
+                (token_hash, 4, "preserved-csrf", expires_at),
+            )
+
+        self.cookiejar.clear()
+        self.cookiejar.set_cookie(Cookie(
+            version=0,
+            name="securityops_session",
+            value=token,
+            port=None,
+            port_specified=False,
+            domain="127.0.0.1",
+            domain_specified=False,
+            domain_initial_dot=False,
+            path="/",
+            path_specified=True,
+            secure=False,
+            expires=None,
+            discard=True,
+            comment=None,
+            comment_url=None,
+            rest={"HttpOnly": None, "SameSite": "Strict"},
+            rfc2109=False,
+        ))
+        self.csrf = "preserved-csrf"
+        self.start_server()
+
+        code, incident = self.request("GET", "/incidents/17")
+        self.assertEqual(code, 200)
+        self.assertEqual(incident["title"], "Legacy incident")
+        self.assertEqual(self.request("GET", "/incidents/17/history")[1][0]["id"], 8)
+        self.assertEqual(self.request("GET", "/incidents/17/notes")[1][0]["id"], 9)
+        self.assertEqual(self.request("GET", "/auth/session")[1]["user"]["email"], "existing-admin@example.test")
+        self.assertEqual(
+            self.request("POST", "/incidents/17/notes", {"content": "Session still valid"})[0],
+            201,
+        )
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT display_name, email, password_hash FROM users WHERE id = 4"
+                ).fetchone(),
+                (
+                    "Existing Administrator",
+                    "existing-admin@example.test",
+                    existing_password_hash,
+                ),
+            )
+            self.assertEqual(connection.execute("SELECT organization_id FROM users WHERE id = 4").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM sessions WHERE token_hash = ?", (token_hash,)).fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT organization_id FROM incidents WHERE id = 17").fetchone()[0], 1)
+
+    def test_organization_isolation_for_incidents_and_user_administration(self):
+        _, local_user = self.request(
+            "POST",
+            "/users",
+            {
+                "display_name": "Local analyst",
+                "email": "local-analyst@example.test",
+                "password": "local analyst password",
+                "role": "analista",
+            },
+        )
+        _, local_incident = self.request("POST", "/incidents", self.payload())
+        self.request("PATCH", f'/incidents/{local_incident["id"]}/status', {"status": "investigating"})
+        self.request(
+            "POST",
+            f'/incidents/{local_incident["id"]}/notes',
+            {"content": "Private local note"},
+        )
+
+        environment = os.environ.copy()
+        environment["SECURITYOPS_DATABASE"] = str(self.database)
+        created = subprocess.run(
+            [sys.executable, str(BACKEND / "main.py"), "create-organization"],
+            input=(
+                "Second organization\n"
+                "second-admin@example.test\n"
+                "Second Administrator\n"
+                "second organization password\n"
+                "second organization password\n"
+            ),
+            text=True,
+            capture_output=True,
+            env=environment,
+            timeout=30,
+        )
+        self.assertEqual(created.returncode, 0, created.stderr)
+        second_admin = self.login_client(
+            "second-admin@example.test", "second organization password"
+        )
+        _, second_incident = self.request(
+            "POST", "/incidents", self.payload(title="Second tenant incident"), client=second_admin
+        )
+
+        self.assertEqual(self.request("GET", "/incidents", client=second_admin), (200, [second_incident]))
+        self.assertEqual(
+            self.request("GET", "/incidents")[1],
+            [local_incident | {"status": "investigating"}],
+        )
+        filtered = self.request(
+            "GET",
+            "/incidents?" + urlencode({"status": "open", "severity": "high"}),
+            client=second_admin,
+        )
+        self.assertEqual(filtered, (200, [second_incident]))
+        self.assertEqual(
+            self.request(
+                "GET", "/incidents?" + urlencode({"status": "open"}), client=second_admin
+            ),
+            (200, [second_incident]),
+        )
+        self.assertEqual(
+            self.request(
+                "GET", "/incidents?" + urlencode({"severity": "high"}), client=second_admin
+            ),
+            (200, [second_incident]),
+        )
+
+        foreign_incident = local_incident["id"]
+        for suffix in ("", "/history", "/notes"):
+            self.assertEqual(
+                self.request("GET", f"/incidents/{foreign_incident}{suffix}", client=second_admin)[0],
+                404,
+            )
+        self.assertEqual(
+            self.request(
+                "PATCH",
+                f"/incidents/{foreign_incident}/status",
+                {"status": "resolved"},
+                client=second_admin,
+            )[0],
+            404,
+        )
+        self.assertEqual(
+            self.request(
+                "POST",
+                f"/incidents/{foreign_incident}/notes",
+                {"content": "Must not be attached"},
+                client=second_admin,
+            )[0],
+            404,
+        )
+        for suffix in ("", "/history", "/notes"):
+            self.assertEqual(
+                self.request(
+                    "GET", f'/incidents/{second_incident["id"]}{suffix}'
+                )[0],
+                404,
+            )
+        self.assertEqual(
+            self.request(
+                "PATCH",
+                f'/incidents/{second_incident["id"]}/status',
+                {"status": "resolved"},
+            )[0],
+            404,
+        )
+        self.assertEqual(
+            self.request(
+                "POST",
+                f'/incidents/{second_incident["id"]}/notes',
+                {"content": "Must not be attached"},
+            )[0],
+            404,
+        )
+        self.assertEqual(
+            self.request("GET", f'/incidents/{foreign_incident}', client=(self.opener, self.csrf))[1]["status"],
+            "investigating",
+        )
+        self.assertEqual(
+            self.request("GET", f'/incidents/{foreign_incident}/history')[1][0]["new_status"],
+            "investigating",
+        )
+        self.assertEqual(
+            self.request("GET", f'/incidents/{foreign_incident}/notes')[1][0]["content"],
+            "Private local note",
+        )
+
+        second_users = self.request("GET", "/users", client=second_admin)
+        self.assertEqual(second_users[0], 200)
+        self.assertEqual([item["email"] for item in second_users[1]], ["second-admin@example.test"])
+        local_users = self.request("GET", "/users")[1]
+        self.assertEqual(
+            [item["email"] for item in local_users],
+            ["admin@example.test", "local-analyst@example.test"],
+        )
+        self.assertIn(local_user, local_users)
+        self.assertEqual(
+            self.request("PATCH", f'/users/{local_user["id"]}', {"role": "lector"}, client=second_admin)[0],
+            404,
+        )
+        self.assertEqual(
+            self.request(
+                "POST", f'/users/{local_user["id"]}/password',
+                {"password": "attempted cross org password"},
+                client=second_admin,
+            )[0],
+            404,
+        )
+        self.assertEqual(
+            self.request(
+                "PATCH",
+                f'/users/{second_users[1][0]["id"]}',
+                {"role": "lector"},
+            )[0],
+            404,
+        )
+        self.assertEqual(
+            self.request(
+                "POST",
+                f'/users/{second_users[1][0]["id"]}/password',
+                {"password": "attempted cross org password"},
+            )[0],
+            404,
+        )
+        self.assertEqual(
+            self.request(
+                "POST",
+                "/users",
+                {
+                    "display_name": "Attempted escape",
+                    "email": "attempted-escape@example.test",
+                    "password": "attempted escape password",
+                    "role": "lector",
+                    "organization_id": 1,
+                },
+                client=second_admin,
+            )[0],
+            422,
+        )
+        self.assertEqual(
+            self.request(
+                "PATCH", f'/users/{second_users[1][0]["id"]}',
+                {"organization_id": 1},
+                client=second_admin,
+            )[0],
+            422,
+        )
+        self.assertEqual(
+            self.request(
+                "POST", "/incidents",
+                self.payload(organization_id=1),
+                client=second_admin,
+            )[0],
+            422,
+        )
 
     def test_persistence_after_process_restart(self):
         code, incident = self.request("POST", "/incidents", self.payload())

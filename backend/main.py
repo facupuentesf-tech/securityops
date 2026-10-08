@@ -16,7 +16,7 @@ from typing import Annotated, Literal
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 
 DATABASE_PATH = Path(
@@ -127,7 +127,8 @@ def session_user(request: Request) -> dict | None:
     with closing(connect()) as connection:
         row = connection.execute(
             """
-            SELECT s.csrf_token, s.expires_at, u.id, u.display_name, u.email, u.role, u.is_active
+            SELECT s.csrf_token, s.expires_at, u.id, u.display_name, u.email, u.role,
+                   u.is_active, u.organization_id
             FROM sessions s JOIN users u ON u.id = s.user_id
             WHERE s.token_hash = ?
             """,
@@ -144,6 +145,7 @@ def session_user(request: Request) -> dict | None:
         "display_name": row["display_name"],
         "email": row["email"],
         "role": row["role"],
+        "organization_id": row["organization_id"],
         "csrf_token": row["csrf_token"],
     }
 
@@ -170,6 +172,8 @@ class LoginRequest(BaseModel):
 
 
 class UserCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     display_name: DisplayName
     email: Email
     password: Password
@@ -177,6 +181,8 @@ class UserCreate(BaseModel):
 
 
 class UserUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     display_name: DisplayName | None = None
     email: Email | None = None
     role: Literal["administrador", "analista", "lector"] | None = None
@@ -188,6 +194,8 @@ class PasswordReset(BaseModel):
 
 
 class IncidentCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: str = Field(min_length=1, pattern=r"\S")
     description: str = Field(min_length=1, pattern=r"\S")
     severity: Literal["low", "medium", "high", "critical"]
@@ -195,6 +203,8 @@ class IncidentCreate(BaseModel):
 
 
 class Incident(IncidentCreate):
+    model_config = ConfigDict(extra="ignore")
+
     id: int
     created_at: datetime
 
@@ -284,7 +294,10 @@ def get_session(request: Request):
     if user is None:
         return {"user": None, "csrf_token": None}
     return {
-        "user": {key: value for key, value in user.items() if key != "csrf_token"},
+        "user": {
+            key: value for key, value in user.items()
+            if key not in {"csrf_token", "organization_id"}
+        },
         "csrf_token": user["csrf_token"],
     }
 
@@ -307,28 +320,31 @@ def logout(request: Request, response: Response, user: dict = Depends(require_us
 
 
 @app.get("/users")
-def list_users(_: dict = Depends(require_roles("administrador"))):
+def list_users(actor: dict = Depends(require_roles("administrador"))):
     with closing(connect()) as connection:
         rows = connection.execute(
-            "SELECT id, display_name, email, role, is_active, created_at FROM users ORDER BY id"
+            "SELECT id, display_name, email, role, is_active, created_at "
+            "FROM users WHERE organization_id = ? ORDER BY id",
+            (actor["organization_id"],),
         ).fetchall()
     return [public_user(row) for row in rows]
 
 
 @app.post("/users", status_code=201)
-def create_user(user: UserCreate, _: dict = Depends(require_roles("administrador"))):
+def create_user(user: UserCreate, actor: dict = Depends(require_roles("administrador"))):
     created_at = datetime.now(timezone.utc).isoformat()
     try:
         with closing(connect()) as connection, connection:
             cursor = connection.execute(
-                "INSERT INTO users (display_name, email, password_hash, role, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO users (display_name, email, password_hash, role, created_at, organization_id) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     user.display_name.strip(),
                     user.email.strip().lower(),
                     hash_password(user.password),
                     user.role,
                     created_at,
+                    actor["organization_id"],
                 ),
             )
             row = connection.execute(
@@ -353,7 +369,10 @@ def update_user(user_id: int, update: UserUpdate, actor: dict = Depends(require_
         changes["email"] = changes["email"].strip().lower()
     with closing(connect()) as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
-        target = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        target = connection.execute(
+            "SELECT * FROM users WHERE id = ? AND organization_id = ?",
+            (user_id, actor["organization_id"]),
+        ).fetchone()
         if target is None:
             raise HTTPException(status_code=404, detail="User not found")
         will_be_admin = changes.get("role", target["role"]) == "administrador"
@@ -362,16 +381,17 @@ def update_user(user_id: int, update: UserUpdate, actor: dict = Depends(require_
             raise HTTPException(status_code=409, detail="You cannot deactivate your own account")
         if target["role"] == "administrador" and target["is_active"] and not (will_be_admin and will_be_active):
             remaining = connection.execute(
-                "SELECT COUNT(*) FROM users WHERE role = 'administrador' AND is_active = 1 AND id <> ?",
-                (user_id,),
+                "SELECT COUNT(*) FROM users "
+                "WHERE organization_id = ? AND role = 'administrador' AND is_active = 1 AND id <> ?",
+                (actor["organization_id"], user_id),
             ).fetchone()[0]
             if remaining == 0:
                 raise HTTPException(status_code=409, detail="At least one active administrator is required")
         assignments = ", ".join(f"{field} = ?" for field in changes)
         try:
             connection.execute(
-                f"UPDATE users SET {assignments} WHERE id = ?",
-                (*changes.values(), user_id),
+                f"UPDATE users SET {assignments} WHERE id = ? AND organization_id = ?",
+                (*changes.values(), user_id, actor["organization_id"]),
             )
         except sqlite3.IntegrityError as error:
             if "users.email" in str(error):
@@ -388,28 +408,38 @@ def update_user(user_id: int, update: UserUpdate, actor: dict = Depends(require_
 def reset_user_password(
     user_id: int,
     reset: PasswordReset,
-    _: dict = Depends(require_roles("administrador")),
+    actor: dict = Depends(require_roles("administrador")),
 ):
     with closing(connect()) as connection, connection:
-        target = connection.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+        target = connection.execute(
+            "SELECT id FROM users WHERE id = ? AND organization_id = ?",
+            (user_id, actor["organization_id"]),
+        ).fetchone()
         if target is None:
             raise HTTPException(status_code=404, detail="User not found")
         connection.execute(
-            "UPDATE users SET password_hash = ? WHERE id = ?",
-            (hash_password(reset.password), user_id),
+            "UPDATE users SET password_hash = ? WHERE id = ? AND organization_id = ?",
+            (hash_password(reset.password), user_id, actor["organization_id"]),
         )
         connection.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
     return {"status": "ok"}
 
 
 @app.post("/incidents", response_model=Incident, status_code=201)
-def create_incident(incident: IncidentCreate, _: dict = Depends(require_roles("administrador", "analista"))):
+def create_incident(
+    incident: IncidentCreate,
+    user: dict = Depends(require_roles("administrador", "analista")),
+):
     created_at = datetime.now(timezone.utc).isoformat()
     with closing(connect()) as connection, connection:
         cursor = connection.execute(
-            "INSERT INTO incidents (title, description, severity, status, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (incident.title, incident.description, incident.severity, incident.status, created_at),
+            "INSERT INTO incidents "
+            "(title, description, severity, status, created_at, organization_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                incident.title, incident.description, incident.severity, incident.status,
+                created_at, user["organization_id"],
+            ),
         )
         row = connection.execute("SELECT * FROM incidents WHERE id = ?", (cursor.lastrowid,)).fetchone()
     return dict(row)
@@ -423,11 +453,17 @@ def update_incident_status(
 ):
     with closing(connect()) as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
-        row = connection.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+        row = connection.execute(
+            "SELECT * FROM incidents WHERE id = ? AND organization_id = ?",
+            (incident_id, user["organization_id"]),
+        ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Incident not found")
         if row["status"] != update.status:
-            connection.execute("UPDATE incidents SET status = ? WHERE id = ?", (update.status, incident_id))
+            connection.execute(
+                "UPDATE incidents SET status = ? WHERE id = ? AND organization_id = ?",
+                (update.status, incident_id, user["organization_id"]),
+            )
             connection.execute(
                 "INSERT INTO incident_status_history "
                 "(incident_id, previous_status, new_status, changed_at, changed_by) VALUES (?, ?, ?, ?, ?)",
@@ -439,14 +475,20 @@ def update_incident_status(
                     user["id"],
                 ),
             )
-        row = connection.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+        row = connection.execute(
+            "SELECT * FROM incidents WHERE id = ? AND organization_id = ?",
+            (incident_id, user["organization_id"]),
+        ).fetchone()
     return dict(row)
 
 
 @app.get("/incidents/{incident_id}/history", response_model=list[IncidentStatusHistory])
-def get_incident_history(incident_id: int, _: dict = Depends(require_user)):
+def get_incident_history(incident_id: int, user: dict = Depends(require_user)):
     with closing(connect()) as connection:
-        incident = connection.execute("SELECT id FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+        incident = connection.execute(
+            "SELECT id FROM incidents WHERE id = ? AND organization_id = ?",
+            (incident_id, user["organization_id"]),
+        ).fetchone()
         if incident is None:
             raise HTTPException(status_code=404, detail="Incident not found")
         rows = connection.execute(
@@ -468,7 +510,10 @@ def create_incident_note(
     user: dict = Depends(require_roles("administrador", "analista")),
 ):
     with closing(connect()) as connection, connection:
-        incident = connection.execute("SELECT id FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+        incident = connection.execute(
+            "SELECT id FROM incidents WHERE id = ? AND organization_id = ?",
+            (incident_id, user["organization_id"]),
+        ).fetchone()
         if incident is None:
             raise HTTPException(status_code=404, detail="Incident not found")
         cursor = connection.execute(
@@ -488,9 +533,12 @@ def create_incident_note(
 
 
 @app.get("/incidents/{incident_id}/notes", response_model=list[IncidentNote])
-def list_incident_notes(incident_id: int, _: dict = Depends(require_user)):
+def list_incident_notes(incident_id: int, user: dict = Depends(require_user)):
     with closing(connect()) as connection:
-        incident = connection.execute("SELECT id FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+        incident = connection.execute(
+            "SELECT id FROM incidents WHERE id = ? AND organization_id = ?",
+            (incident_id, user["organization_id"]),
+        ).fetchone()
         if incident is None:
             raise HTTPException(status_code=404, detail="Incident not found")
         rows = connection.execute(
@@ -509,10 +557,10 @@ def list_incident_notes(incident_id: int, _: dict = Depends(require_user)):
 def list_incidents(
     status: Literal["open", "investigating", "resolved"] | None = None,
     severity: Literal["low", "medium", "high", "critical"] | None = None,
-    _: dict = Depends(require_user),
+    user: dict = Depends(require_user),
 ):
-    conditions = []
-    parameters = []
+    conditions = ["organization_id = ?"]
+    parameters = [user["organization_id"]]
     if status is not None:
         conditions.append("status = ?")
         parameters.append(status)
@@ -529,28 +577,26 @@ def list_incidents(
 
 
 @app.get("/incidents/{incident_id}", response_model=Incident)
-def get_incident(incident_id: int, _: dict = Depends(require_user)):
+def get_incident(incident_id: int, user: dict = Depends(require_user)):
     with closing(connect()) as connection:
-        row = connection.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+        row = connection.execute(
+            "SELECT * FROM incidents WHERE id = ? AND organization_id = ?",
+            (incident_id, user["organization_id"]),
+        ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Incident not found")
     return dict(row)
 
 
-def create_first_admin() -> int:
-    migrate_database()
-    with closing(connect()) as connection:
-        if connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]:
-            print("Ya existen usuarios; el administrador inicial solo se puede crear en una base vacía.", file=sys.stderr)
-            return 1
+def prompt_admin_details() -> tuple[str, str, str] | None:
     email = input("Correo del administrador: ").strip().lower()
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email) or len(email) > 254:
         print("Ingresá una dirección de correo válida.", file=sys.stderr)
-        return 1
+        return None
     display_name = input("Nombre del administrador: ").strip()
     if not display_name or len(display_name) > 120:
         print("El nombre debe contener entre 1 y 120 caracteres.", file=sys.stderr)
-        return 1
+        return None
     if sys.stdin.isatty():
         password_reader = getpass
     else:
@@ -559,17 +605,32 @@ def create_first_admin() -> int:
     confirmation = password_reader("Confirmá la contraseña: ")
     if len(password) < PASSWORD_MIN_LENGTH or len(password) > 128:
         print("La contraseña debe contener entre 12 y 128 caracteres.", file=sys.stderr)
-        return 1
+        return None
     if password != confirmation:
         print("Las contraseñas no coinciden.", file=sys.stderr)
+        return None
+    return email, display_name, password
+
+
+def create_first_admin() -> int:
+    migrate_database()
+    with closing(connect()) as connection:
+        if connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]:
+            print("Ya existen usuarios; el administrador inicial solo se puede crear en una base vacía.", file=sys.stderr)
+            return 1
+    account = prompt_admin_details()
+    if account is None:
         return 1
+    email, display_name, password = account
     with closing(connect()) as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
         if connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]:
             print("Ya existe un usuario; no se creó otro administrador inicial.", file=sys.stderr)
             return 1
         connection.execute(
-            "INSERT INTO users (display_name, email, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO users "
+            "(display_name, email, password_hash, role, created_at, organization_id) "
+            "VALUES (?, ?, ?, ?, ?, 1)",
             (
                 display_name,
                 email,
@@ -582,12 +643,100 @@ def create_first_admin() -> int:
     return 0
 
 
+def create_organization() -> int:
+    migrate_database()
+    with closing(connect()) as connection:
+        unadministered = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM organizations o
+            WHERE NOT EXISTS (
+                SELECT 1 FROM users u
+                WHERE u.organization_id = o.id
+                  AND u.role = 'administrador'
+                  AND u.is_active = 1
+            )
+            """
+        ).fetchone()[0]
+    if unadministered:
+        print(
+            "Creá primero un administrador para cada organización existente.",
+            file=sys.stderr,
+        )
+        return 1
+    name = input("Nombre de la organización: ").strip()
+    if not name or len(name) > 120:
+        print("El nombre debe contener entre 1 y 120 caracteres.", file=sys.stderr)
+        return 1
+    account = prompt_admin_details()
+    if account is None:
+        return 1
+    email, display_name, password = account
+    created_at = datetime.now(timezone.utc).isoformat()
+    try:
+        with closing(connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            unadministered = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM organizations o
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM users u
+                    WHERE u.organization_id = o.id
+                      AND u.role = 'administrador'
+                      AND u.is_active = 1
+                )
+                """
+            ).fetchone()[0]
+            if unadministered:
+                print(
+                    "Creá primero un administrador para cada organización existente.",
+                    file=sys.stderr,
+                )
+                return 1
+            if connection.execute(
+                "SELECT 1 FROM organizations WHERE name = ? COLLATE NOCASE", (name,)
+            ).fetchone():
+                print("Ya existe una organización con ese nombre.", file=sys.stderr)
+                return 1
+            cursor = connection.execute(
+                "INSERT INTO organizations (name, created_at) VALUES (?, ?)",
+                (name, created_at),
+            )
+            organization_id = cursor.lastrowid
+            connection.execute(
+                "INSERT INTO users "
+                "(display_name, email, password_hash, role, created_at, organization_id) "
+                "VALUES (?, ?, ?, 'administrador', ?, ?)",
+                (
+                    display_name,
+                    email,
+                    hash_password(password),
+                    created_at,
+                    organization_id,
+                ),
+            )
+    except sqlite3.IntegrityError as error:
+        if "users.email" in str(error):
+            print("Ya existe un usuario con ese correo.", file=sys.stderr)
+            return 1
+        raise
+    print(f"Organización y administrador creados: {name} ({email})")
+    return 0
+
+
 def run_cli() -> int:
     parser = argparse.ArgumentParser(description="Herramientas locales de SecurityOps")
-    parser.add_argument("command", choices=("create-admin",), help="crear el primer administrador")
+    parser.add_argument(
+        "command",
+        choices=("create-admin", "create-organization"),
+        help="crear el primer administrador o una organización con su administrador",
+    )
     arguments = parser.parse_args()
     if arguments.command == "create-admin":
         return create_first_admin()
+    if arguments.command == "create-organization":
+        return create_organization()
     return 2
 
 
