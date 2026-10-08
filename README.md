@@ -17,6 +17,7 @@ compartido.
 
 ### Funciones implementadas
 
+- Resumen inicial por organización para todos los roles, con totales, distribuciones y prioridades.
 - Crear, listar y consultar incidentes.
 - Auditoría local de cambios de negocio y usuarios, con consulta paginada solo para administradores.
 - Asignar responsables opcionales a incidentes y riesgos, con filtros por responsable.
@@ -45,6 +46,7 @@ compartido.
 
 | Operación | Administrador | Analista | Lector |
 | --- | --- | --- | --- |
+| Consultar el resumen de la organización | Sí | Sí | Sí |
 | Consultar incidentes, historial y notas | Sí | Sí | Sí |
 | Crear incidentes, cambiar estado y agregar notas | Sí | Sí | No |
 | Consultar activos | Sí | Sí | Sí |
@@ -73,7 +75,7 @@ Aún no están implementados:
 - Edición y eliminación de controles de seguridad, evaluación de eficacia
 - Eventos de auditoría de autenticación (login, logout, rechazos y expiración)
 - Reportes
-- Dashboard
+- Extensiones del dashboard y métricas adicionales
 
 ## Activos: creación y consulta
 
@@ -413,7 +415,7 @@ locales y controles de creación ocultos para lectores.
 Prototipo funcional local con autenticación, permisos y aislamiento entre
 organizaciones, con creación y consulta de activos. Edición y eliminación de
 activos, edición y eliminación de riesgos y controles, auditoría de autenticación,
-reportes y dashboard continúan pendientes.
+reportes y métricas adicionales continúan pendientes. El resumen inicial está implementado.
 
 ## Activos afectados por incidente
 
@@ -701,3 +703,28 @@ manuales están en [docs/audit.md](docs/audit.md).
 
 Es **auditoría local**: no garantiza resistencia a modificaciones de alguien con
 acceso directo a SQLite. Los eventos de autenticación quedan pendientes.
+
+
+## Resumen inicial
+
+**Resumen** es la pantalla inicial al iniciar sesión y está disponible para
+administradores, analistas y lectores. **Gestión** conserva los módulos actuales.
+Muestra totales y distribuciones de incidentes (estado y severidad), activos
+(criticidad), riesgos (nivel y estado) y controles (estado), incluidas categorías
+con cero. Presenta los incidentes pendientes sin responsable, los 5 pendientes
+más recientes y los riesgos identificados/en tratamiento sin responsable y los
+5 de mayor puntaje. Los enlaces abren los detalles existentes; etiquetas y
+fechas se muestran en español y en la zona horaria del navegador.
+
+`GET /dashboard` obtiene la organización de la sesión, parametriza las consultas
+y usa una única transacción de lectura consistente. No consulta usuarios ni
+auditoría y no une relaciones que multipliquen conteos. Incidentes recientes:
+fecha descendente e ID descendente. Riesgos prioritarios: probabilidad × impacto
+descendente e ID descendente; los aceptados no participan de esa lista.
+No calcula reducción, eficacia de controles ni puntajes globales de seguridad.
+
+Al volver a Resumen o pulsar **Actualizar** se consultan datos nuevos y se muestra
+la fecha local de actualización. Incluye mensajes de carga/error/vacío,
+**Reintentar**, renderizado seguro y diseño adaptable. No requiere migración nueva
+ni modifica datos. Contrato de API, pruebas y pasos manuales:
+[docs/dashboard.md](docs/dashboard.md).

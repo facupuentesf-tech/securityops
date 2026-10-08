@@ -483,6 +483,65 @@ def logout(request: Request, response: Response, user: dict = Depends(require_us
     return {"status": "ok"}
 
 
+@app.get("/dashboard")
+def dashboard(user: dict = Depends(require_user)):
+    organization = (user["organization_id"],)
+
+    def distribution(connection, table, column, categories):
+        # Table/column names are constants from the calls below, never client input.
+        counts = dict.fromkeys(categories, 0)
+        for row in connection.execute(
+            f"SELECT {column} AS category, COUNT(*) AS amount FROM {table} "
+            f"WHERE organization_id = ? GROUP BY {column}", organization,
+        ):
+            counts[row["category"]] = row["amount"]
+        return counts
+
+    with closing(connect()) as connection, connection:
+        connection.execute("BEGIN")
+        incident_states = distribution(connection, "incidents", "status", ("open", "investigating", "resolved"))
+        incident_severities = distribution(connection, "incidents", "severity", ("low", "medium", "high", "critical"))
+        pending_unassigned = connection.execute(
+            "SELECT COUNT(*) FROM incidents WHERE organization_id = ? "
+            "AND status IN ('open', 'investigating') AND assignee_id IS NULL", organization,
+        ).fetchone()[0]
+        recent = connection.execute(
+            "SELECT id, title, status, severity, created_at FROM incidents WHERE organization_id = ? "
+            "AND status IN ('open', 'investigating') ORDER BY created_at DESC, id DESC LIMIT 5", organization,
+        ).fetchall()
+        asset_criticalities = distribution(connection, "assets", "criticality", ("low", "medium", "high", "critical"))
+        risk_states = distribution(connection, "risks", "status", ("identified", "treating", "accepted"))
+        risk_levels = dict.fromkeys(RISK_LEVEL_RANGES, 0)
+        for row in connection.execute(
+            "SELECT probability * impact AS score, COUNT(*) AS amount FROM risks "
+            "WHERE organization_id = ? GROUP BY probability * impact", organization,
+        ):
+            risk_levels[risk_level(row["score"])] += row["amount"]
+        risk_unassigned = connection.execute(
+            "SELECT COUNT(*) FROM risks WHERE organization_id = ? "
+            "AND status IN ('identified', 'treating') AND assignee_id IS NULL", organization,
+        ).fetchone()[0]
+        priority = connection.execute(
+            "SELECT id, title, status, probability, impact, probability * impact AS score, created_at "
+            "FROM risks WHERE organization_id = ? AND status IN ('identified', 'treating') "
+            "ORDER BY score DESC, id DESC LIMIT 5", organization,
+        ).fetchall()
+        control_states = distribution(connection, "security_controls", "status", ("planned", "implemented", "retired"))
+        generated_at = datetime.now(timezone.utc).isoformat()
+    return {
+        "generated_at": generated_at,
+        "incidents": {"total": sum(incident_states.values()), "by_status": incident_states,
+                      "by_severity": incident_severities,
+                      "pending": {"total": incident_states["open"] + incident_states["investigating"],
+                                  "unassigned": pending_unassigned, "recent": [dict(row) for row in recent]}},
+        "assets": {"total": sum(asset_criticalities.values()), "by_criticality": asset_criticalities},
+        "risks": {"total": sum(risk_states.values()), "by_status": risk_states, "by_level": risk_levels,
+                  "unassigned_pending": risk_unassigned,
+                  "priority": [dict(row) | {"level": risk_level(row["score"])} for row in priority]},
+        "controls": {"total": sum(control_states.values()), "by_status": control_states},
+    }
+
+
 @app.get("/audit-logs")
 def list_audit_logs(
     actor_id: Annotated[int | None, Query(gt=0)] = None,

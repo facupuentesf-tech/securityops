@@ -23,6 +23,7 @@ FastAPI (backend/main.py)
        |-- /static: CSS and JavaScript
        |-- /docs: API schema
        |-- /auth: login, session and logout
+       |-- /dashboard: organization summary for all authenticated roles
        |-- /audit-logs: administrator-only organization audit queries
        |-- /users: administrator-only management
        |-- /incidents: role-protected operations
@@ -147,7 +148,7 @@ database, including authentication, permissions, migration of legacy data,
 incident and asset workflows, tenant isolation and persistence. An optional Node.js/Chrome smoke
 test exercises the authenticated interface at desktop and mobile widths.
 
-Asset editing and deletion, risk/control extensions, authentication audit events, reports and dashboards remain
+Asset editing and deletion, risk/control extensions, authentication audit events, reports and further dashboard metrics remain
 future work. React, PostgreSQL and Docker are possible later choices.
 
 ## Incident-asset links (implemented)
@@ -270,3 +271,22 @@ all existing data and never reconstructs past events. Authentication events are
 deferred. This local audit does not resist modification by someone with direct
 SQLite access. See [audit.md](audit.md) for the event contract, query validation,
 transaction guarantees, tests and manual verification steps.
+
+
+## Initial dashboard (implemented)
+
+Authenticated administrators, analysts and readers can query `GET /dashboard`.
+The server derives the organization from the session and binds it in every
+query. One SQLite read transaction provides a consistent summary of incidents,
+assets, risks and controls, with zero-valued categories, pending unassigned
+counts, five recent pending incidents and five highest-scoring identified/treating
+risks. Date/ID descending orders recent incidents; score/ID descending orders
+priority risks. Counts do not join many-to-many relations. No user or audit data,
+control-effectiveness estimates or global security scores are included.
+
+The Spanish Resumen screen is the initial authenticated view; Gestión retains
+all existing modules and permissions. Detail links, safe text, local dates,
+automatic refresh on return, manual refresh, loading/error/retry/empty feedback
+and responsive accessible layouts are provided. No schema migration or data
+writes are needed. See [dashboard.md](dashboard.md) for the response contract,
+consistent-read test and API/browser/manual verification.

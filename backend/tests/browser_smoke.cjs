@@ -57,6 +57,11 @@ async function poll(fn) {
   await evaluate(`(() => {const f=document.getElementById('login-form');f.elements.email.value='admin@example.test';f.elements.password.value='correct horse battery';f.requestSubmit();})()`);
   await wait(`document.getElementById('list-feedback')?.textContent.includes('Todavía')`);
   assert.equal(await evaluate(`document.documentElement.lang`),'es');
+  await wait(`!document.getElementById('dashboard-content').hidden && document.getElementById('dashboard-feedback').textContent.includes('todavía')`);
+  assert.equal(await evaluate(`!document.getElementById('dashboard-view').hidden && document.getElementById('management-view').hidden && document.getElementById('summary-nav').getAttribute('aria-current') === 'page' && document.querySelectorAll('#dashboard-cards .dashboard-card').length === 4`),true);
+  await evaluate(`document.getElementById('management-nav').click()`);
+  assert.equal(await evaluate(`document.getElementById('dashboard-view').hidden && !document.getElementById('management-view').hidden`),true);
+
   await wait(`!document.getElementById('audit-view').hidden && document.getElementById('audit-feedback').textContent.includes('No hay eventos')`);
   assert.equal(await evaluate(`document.getElementById('audit-previous').disabled && document.getElementById('audit-next').disabled`),true);
 
@@ -326,6 +331,38 @@ async function poll(fn) {
   }
   await evaluate(`(() => {const f=document.getElementById('user-create-form');f.elements.display_name.value='Smoke Reader';f.elements.email.value='smoke-reader@example.test';f.elements.password.value='smoke reader password';f.elements.role.value='lector';f.requestSubmit();})()`);
   await wait(`document.getElementById('user-list').textContent.includes('smoke-reader@example.test')`);
+  // Summary navigation, safe details, automatic return refresh and manual update.
+  await evaluate(`document.getElementById('summary-nav').click()`);
+  await wait(`!document.getElementById('dashboard-content').hidden && document.querySelectorAll('#dashboard-incidents a').length === 1 && document.querySelectorAll('#dashboard-risks a').length === 2`);
+  assert.equal(await evaluate(`document.getElementById('dashboard-incidents').textContent.includes('Alta') && document.getElementById('dashboard-risks').textContent.includes('Crítico') && !document.querySelector('#dashboard-view img') && !window.xss`),true);
+  assert.equal(await evaluate(`Array.from(document.querySelectorAll('#dashboard-view time')).every(t=>t.textContent === new Intl.DateTimeFormat('es',{dateStyle:'medium',timeStyle:'short'}).format(new Date(t.dateTime)))`),true);
+  await evaluate(`document.querySelector('#dashboard-incidents a').click()`);
+  await wait(`document.getElementById('dashboard-view').hidden && !document.getElementById('management-view').hidden && !document.getElementById('detail-content').hidden`);
+  assert.equal(await evaluate(`document.getElementById('detail-title').textContent`),payload);
+  await evaluate(`document.getElementById('summary-nav').click()`);
+  await wait(`!document.getElementById('dashboard-content').hidden`);
+  await evaluate(`document.querySelector('#dashboard-risks a').click()`);
+  await wait(`document.getElementById('dashboard-view').hidden && !document.getElementById('risk-detail-content').hidden`);
+  assert.equal(await evaluate(`document.getElementById('risk-detail-title').textContent`),payload);
+  await evaluate(`(async()=>{const incident=(await api('/incidents'))[0];window.dashboardIncident=incident;await api('/incidents/'+incident.id+'/status','PATCH',{status:'resolved'});document.getElementById('summary-nav').click();})()`);
+  await wait(`!document.getElementById('dashboard-content').hidden && document.getElementById('dashboard-incidents').textContent.includes('No hay incidentes pendientes')`);
+  await evaluate(`(async()=>{await api('/incidents/'+window.dashboardIncident.id+'/status','PATCH',{status:window.dashboardIncident.status});document.getElementById('reload-dashboard').click();})()`);
+  await wait(`document.querySelectorAll('#dashboard-incidents a').length === 1 && !document.getElementById('dashboard-content').hidden`);
+  await command('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+  assert.equal(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth && getComputedStyle(document.getElementById('dashboard-cards')).gridTemplateColumns.split(' ').length === 1`),true);
+  await command('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
+  assert.equal(await evaluate(`getComputedStyle(document.getElementById('dashboard-cards')).gridTemplateColumns.split(' ').length === 4`),true);
+  await evaluate(`window.fetch=async()=>{throw new TypeError('offline')};document.getElementById('reload-dashboard').click()`);
+  await wait(`document.getElementById('dashboard-feedback').textContent.includes('conectar') && !document.getElementById('retry-dashboard').hidden && document.getElementById('dashboard-content').hidden`);
+  await evaluate(`window.fetch=window.originalFetch;document.getElementById('retry-dashboard').click()`);
+  await wait(`!document.getElementById('dashboard-content').hidden && document.getElementById('retry-dashboard').hidden`);
+  await evaluate(`window.fetch=(...args)=>new Promise(resolve=>{window.releaseDashboard=()=>resolve(window.originalFetch(...args));});document.getElementById('reload-dashboard').click()`);
+  await wait(`document.getElementById('dashboard-feedback').textContent.includes('Cargando') && document.getElementById('dashboard-view').getAttribute('aria-busy') === 'true'`);
+  await evaluate(`window.fetch=window.originalFetch;document.getElementById('management-nav').click();window.releaseDashboard()`);
+  await wait(`document.getElementById('dashboard-view').hidden`);
+  await evaluate(`document.getElementById('summary-nav').click()`);
+  await wait(`!document.getElementById('dashboard-content').hidden && document.getElementById('dashboard-updated').textContent.includes('actualizado')`);
+  await evaluate(`document.getElementById('management-nav').click()`);
   // Audit list, immutable historical actor text, combined filters, pagination and feedback.
   await evaluate(`(async () => {
     await api('/users/1', 'PATCH', {display_name: ${JSON.stringify(payload)}});
@@ -377,6 +414,10 @@ async function poll(fn) {
     })`));
     throw error;
   }
+
+  await wait(`!document.getElementById('dashboard-content').hidden && !document.getElementById('dashboard-view').hidden`);
+  assert.equal(await evaluate(`document.getElementById('management-view').hidden && !document.getElementById('dashboard-view').textContent.includes('Test Administrator') && !document.getElementById('dashboard-view').textContent.includes('Auditoría')`),true);
+  await evaluate(`document.getElementById('management-nav').click()`);
   assert.equal(await evaluate(`document.getElementById('new-button').hidden && document.getElementById('users-view').hidden`),true);
   assert.equal(await evaluate(`document.getElementById('audit-view').hidden && document.getElementById('audit-list').children.length === 0`),true);
   await wait(`document.querySelectorAll('#asset-list .asset').length === 1`);
@@ -402,7 +443,7 @@ async function poll(fn) {
   await evaluate(`document.querySelector('.control-name').click()`);
   await wait(`!document.getElementById('control-detail-content').hidden`);
   assert.equal(await evaluate(`document.getElementById('control-detail-name').textContent`),payload);
-  console.log('OK: auditoría (permisos, filtros, paginación, carga/error/vacío, XSS, fechas y móvil), login/logout, administración de usuarios, lector, responsables, limpieza de asignaciones, incidentes, activos, riesgos, controles, vínculos, historial, notas, filtros, XSS, fechas locales, errores de red, /docs y anchos 1280/390.');
+  console.log('OK: resumen (navegación, actualización, enlaces, carga/error/reintento, permisos, fechas y móvil), auditoría (permisos, filtros, paginación, carga/error/vacío, XSS, fechas y móvil), login/logout, administración de usuarios, lector, responsables, limpieza de asignaciones, incidentes, activos, riesgos, controles, vínculos, historial, notas, filtros, XSS, fechas locales, errores de red, /docs y anchos 1280/390.');
   await command('Browser.close');
 })().catch(error => { console.error(error);process.exitCode=1; }).finally(async () => {
   if(socket && socket.readyState===WebSocket.OPEN) {

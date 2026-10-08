@@ -160,7 +160,7 @@ Each incident should have:
 
 Description, severity, status, date and optional responsible-person assignment
 are implemented, together with local business/user audit logs. Authentication audit events,
-reports, dashboards and security documentation management also remain future
+reports, further dashboard metrics and security documentation management also remain future
 work. Multi-organization isolation is implemented; shared deployment is not.
 
 ## Incident-asset links (implemented)
@@ -281,3 +281,22 @@ all existing data and never reconstructs past events. Authentication events are
 deferred. This local audit does not resist modification by someone with direct
 SQLite access. See [audit.md](audit.md) for the event contract, query validation,
 transaction guarantees, tests and manual verification steps.
+
+
+## Initial dashboard (implemented)
+
+Authenticated administrators, analysts and readers can query `GET /dashboard`.
+The server derives the organization from the session and binds it in every
+query. One SQLite read transaction provides a consistent summary of incidents,
+assets, risks and controls, with zero-valued categories, pending unassigned
+counts, five recent pending incidents and five highest-scoring identified/treating
+risks. Date/ID descending orders recent incidents; score/ID descending orders
+priority risks. Counts do not join many-to-many relations. No user or audit data,
+control-effectiveness estimates or global security scores are included.
+
+The Spanish Resumen screen is the initial authenticated view; Gestión retains
+all existing modules and permissions. Detail links, safe text, local dates,
+automatic refresh on return, manual refresh, loading/error/retry/empty feedback
+and responsive accessible layouts are provided. No schema migration or data
+writes are needed. See [dashboard.md](dashboard.md) for the response contract,
+consistent-read test and API/browser/manual verification.

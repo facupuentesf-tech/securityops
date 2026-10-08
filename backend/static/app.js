@@ -1,4 +1,6 @@
 "use strict";
+let dashboardVersion = 0;
+let activeSection = "summary";
 let auditVersion = 0;
 let auditPage = 1;
 let auditFilters = new URLSearchParams();
@@ -52,6 +54,12 @@ function message(text, error = false) {
   $("message").hidden = !text;
 }
 function showLogin() {
+  ++dashboardVersion;
+  $("dashboard-content").hidden = true;
+  $("dashboard-cards").replaceChildren();
+  $("dashboard-incidents").replaceChildren();
+  $("dashboard-risks").replaceChildren();
+  $("dashboard-updated").textContent = "";
   ++auditVersion;
   $("audit-view").hidden = true;
   $("audit-list").replaceChildren();
@@ -143,6 +151,7 @@ function showApplication(session) {
   loadList();
   $("audit-view").hidden = currentUser.role !== "administrador";
   if (currentUser.role === "administrador") { loadUsers(); loadAudit(); }
+  showSection("summary", false);
 }
 async function api(path, method = "GET", body) {
   let response;
@@ -1031,7 +1040,6 @@ for (const kind of ["incidents", "risks"]) {
     const {id, version} = assigneeContext(kind); loadAssigneeDetail(kind, id, version);
   });
 }
-start();
 
 function auditDetails(event) {
   const d = event.details;
@@ -1091,3 +1099,99 @@ $("clear-audit-filters").addEventListener("click", () => { $("audit-filter-form"
 $("reload-audit").addEventListener("click", loadAudit);
 $("audit-previous").addEventListener("click", () => { --auditPage; loadAudit(); });
 $("audit-next").addEventListener("click", () => { ++auditPage; loadAudit(); });
+
+
+function showSection(section, focus = true) {
+  if (!currentUser) return;
+  activeSection = section;
+  $("dashboard-view").hidden = section !== "summary";
+  $("management-view").hidden = section !== "management";
+  for (const [id, name] of [["summary-nav", "summary"], ["management-nav", "management"]]) {
+    $(id).className = section === name ? "" : "secondary";
+    if (section === name) $(id).setAttribute("aria-current", "page");
+    else $(id).removeAttribute("aria-current");
+  }
+  ++dashboardVersion;
+  if (section === "summary") {
+    if (focus) $("dashboard-heading").focus();
+    loadDashboard();
+  }
+}
+function dashboardDistribution(card, title, counts, labels) {
+  card.append(element("h3", title));
+  const list = element("ul", undefined, "dashboard-distribution");
+  for (const [key, count] of Object.entries(counts)) list.append(element("li", `${labels[key]}: ${count}`));
+  card.append(list);
+}
+function dashboardCard(title, total) {
+  const card = element("section", undefined, "panel dashboard-card");
+  card.append(element("h2", title), element("p", `${total} en total`, "dashboard-total"));
+  return card;
+}
+function dashboardLink(kind, resource) {
+  const link = element("a", `${resource.title} (#${resource.id})`, "dashboard-link");
+  link.href = `#${kind}-${resource.id}`;
+  link.addEventListener("click", event => {
+    event.preventDefault(); showSection("management");
+    if (kind === "incident") { openDetail(resource.id); $("detail-view").scrollIntoView({block: "start"}); }
+    else { openRiskDetail(resource.id); $("risks-view").scrollIntoView({block: "start"}); }
+  });
+  return link;
+}
+function renderDashboard(data) {
+  const incidents = dashboardCard("Incidentes", data.incidents.total);
+  dashboardDistribution(incidents, "Por estado", data.incidents.by_status, statuses);
+  dashboardDistribution(incidents, "Por severidad", data.incidents.by_severity, severities);
+  incidents.append(element("p", `Pendientes: ${data.incidents.pending.total} · Sin responsable: ${data.incidents.pending.unassigned}`));
+  const assets = dashboardCard("Activos", data.assets.total);
+  dashboardDistribution(assets, "Por criticidad", data.assets.by_criticality, severities);
+  const risks = dashboardCard("Riesgos", data.risks.total);
+  dashboardDistribution(risks, "Por nivel", data.risks.by_level, riskLevels);
+  dashboardDistribution(risks, "Por estado", data.risks.by_status, riskStatuses);
+  risks.append(element("p", `Identificados o en tratamiento sin responsable: ${data.risks.unassigned_pending}`));
+  const controls = dashboardCard("Controles", data.controls.total);
+  dashboardDistribution(controls, "Por estado", data.controls.by_status, controlStatuses);
+  $("dashboard-cards").replaceChildren(incidents, assets, risks, controls);
+  $("dashboard-incidents").replaceChildren(); $("dashboard-risks").replaceChildren();
+  for (const resource of data.incidents.pending.recent) {
+    const row = element("li");
+    row.append(dashboardLink("incident", resource), element("p", `${statuses[resource.status]} · Severidad ${severities[resource.severity]}`), dateNode(resource.created_at));
+    $("dashboard-incidents").append(row);
+  }
+  for (const resource of data.risks.priority) {
+    const row = element("li");
+    row.append(dashboardLink("risk", resource), element("p", `${riskStatuses[resource.status]} · Nivel ${riskLevels[resource.level]} · Puntaje ${resource.score} (${resource.probability} × ${resource.impact})`), dateNode(resource.created_at));
+    $("dashboard-risks").append(row);
+  }
+  if (!data.incidents.pending.recent.length) $("dashboard-incidents").append(element("li", "No hay incidentes pendientes."));
+  if (!data.risks.priority.length) $("dashboard-risks").append(element("li", "No hay riesgos identificados o en tratamiento."));
+}
+async function loadDashboard() {
+  const version = ++dashboardVersion;
+  if (!currentUser || activeSection !== "summary") return;
+  $("dashboard-view").setAttribute("aria-busy", "true");
+  $("dashboard-content").hidden = true;
+  $("dashboard-updated").textContent = "";
+  $("dashboard-feedback").textContent = "Cargando resumen…";
+  $("retry-dashboard").hidden = true;
+  try {
+    const data = await api("/dashboard");
+    if (version !== dashboardVersion || !currentUser || activeSection !== "summary") return;
+    renderDashboard(data);
+    $("dashboard-content").hidden = false;
+    const empty = [data.incidents, data.assets, data.risks, data.controls].every(resource => resource.total === 0);
+    $("dashboard-feedback").textContent = empty ? "Tu organización todavía no tiene incidentes, activos, riesgos ni controles. Podés consultarlos o registrarlos en Gestión según tu rol." : "";
+    $("dashboard-updated").replaceChildren(document.createTextNode("Resumen actualizado: "), dateNode(data.generated_at));
+  } catch (error) {
+    if (version !== dashboardVersion || !currentUser || activeSection !== "summary") return;
+    $("dashboard-feedback").textContent = error.message;
+    $("retry-dashboard").hidden = false;
+  } finally {
+    if (version === dashboardVersion) $("dashboard-view").setAttribute("aria-busy", "false");
+  }
+}
+$("summary-nav").addEventListener("click", () => showSection("summary"));
+$("management-nav").addEventListener("click", () => showSection("management"));
+$("reload-dashboard").addEventListener("click", loadDashboard);
+$("retry-dashboard").addEventListener("click", loadDashboard);
+start();

@@ -21,6 +21,19 @@
       <p id="login-feedback" class="message error" role="alert" hidden></p>
     </section>
     <section id="app-view" hidden>
+    <nav class="section-nav" aria-label="Secciones"><button id="summary-nav" type="button" aria-current="page">Resumen</button><button id="management-nav" type="button" class="secondary">Gestión</button></nav>
+    <section id="dashboard-view" aria-labelledby="dashboard-heading">
+      <div class="page-heading"><div><p class="eyebrow">CENTRO DE SEGURIDAD</p><h1 id="dashboard-heading" tabindex="-1">Resumen</h1><p class="muted">Incidentes, activos, riesgos y controles de tu organización.</p></div><button id="reload-dashboard" type="button" class="secondary">Actualizar</button></div>
+      <p id="dashboard-updated" class="muted"></p><p id="dashboard-feedback" role="status" aria-live="polite"></p><button id="retry-dashboard" type="button" class="secondary" hidden>Reintentar</button>
+      <div id="dashboard-content" hidden>
+        <div id="dashboard-cards" class="dashboard-grid"></div>
+        <div class="dashboard-lists">
+          <section class="panel" aria-labelledby="dashboard-incidents-heading"><h2 id="dashboard-incidents-heading">Incidentes pendientes más recientes</h2><p class="muted">Abiertos o en investigación; hasta 5, por fecha de creación.</p><ul id="dashboard-incidents" class="notes"></ul></section>
+          <section class="panel" aria-labelledby="dashboard-risks-heading"><h2 id="dashboard-risks-heading">Riesgos prioritarios</h2><p class="muted">Identificados o en tratamiento; hasta 5, por probabilidad × impacto. Este puntaje es la evaluación inicial del riesgo.</p><ul id="dashboard-risks" class="notes"></ul></section>
+        </div>
+      </div>
+    </section>
+    <div id="management-view" hidden>
     <div id="message" class="message" role="status" aria-live="polite" hidden></div>
     <section id="list-view">
       <div class="page-heading"><div><p class="eyebrow">CENTRO DE SEGURIDAD</p><h1>Incidentes</h1><p class="muted">Registrá, investigá y seguí los eventos de seguridad.</p></div><button id="new-button" type="button">+ Nuevo incidente</button></div>
@@ -152,6 +165,7 @@
       <p id="users-feedback" class="muted" role="status"></p>
       <div id="user-list" class="user-list"></div>
     </section>
+    </div>
     <footer>SecurityOps · Las fechas se muestran en la zona horaria de tu navegador.</footer>
     </section>
   </main>
