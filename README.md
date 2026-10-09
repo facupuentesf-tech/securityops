@@ -82,7 +82,7 @@ Aún no están implementados:
 - Eliminación de riesgos
 - Eliminación de controles de seguridad, evaluación de eficacia
 - Eventos de auditoría de autenticación (login, logout, rechazos y expiración)
-- Reportes
+- Reportes analíticos adicionales a las exportaciones CSV
 - Extensiones del dashboard y métricas adicionales
 
 ## Activos: creación y consulta
@@ -124,6 +124,10 @@ Para comprobarlo manualmente:
 5. Reiniciar la API y comprobar que los activos siguen disponibles.
 
 ## Tecnologías
+
+Para preparar una demostración de portafolio con datos ficticios en una base
+separada, seguí [docs/demo.md](docs/demo.md). El comando `create-demo` solicita
+contraseñas interactivamente y rechaza bases existentes o habituales.
 
 La versión actual usa Python con FastAPI, Uvicorn y SQLite mediante `sqlite3`
 de la biblioteca estándar. FastAPI sirve la interfaz HTML/CSS/JavaScript

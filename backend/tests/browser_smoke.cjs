@@ -57,6 +57,52 @@ async function poll(fn) {
   await command('Emulation.setTimezoneOverride',{timezoneId:'America/Argentina/Buenos_Aires'});
   await command('Page.navigate',{url:base});
   await wait(`document.getElementById('login-view')?.hidden === false`);
+  if (process.argv.includes('--demo')) {
+    const passwords = JSON.parse(fs.readFileSync(0, 'utf8'));
+    async function demoLogin(email) {
+      await evaluate(`(() => {const f=document.getElementById('login-form');f.elements.email.value=${JSON.stringify(email)};f.elements.password.value=${JSON.stringify(passwords[email])};f.requestSubmit();})()`);
+      await wait(`!document.getElementById('dashboard-content').hidden`);
+    }
+    await demoLogin('admin@aurora.example.test');
+    await wait(`document.querySelectorAll('#incident-list .incident').length === 3 && document.querySelectorAll('#asset-list .asset').length === 4`);
+    await evaluate(`document.getElementById('management-nav').click();const f=document.getElementById('filter-form');f.elements.status.value='investigating';f.elements.severity.value='high';f.requestSubmit()`);
+    await wait(`document.querySelectorAll('#incident-list .incident').length === 1`);
+    await evaluate(`document.querySelector('#incident-list .incident-title').click()`);
+    await wait(`document.querySelectorAll('#affected-list li').length === 2 && document.getElementById('notes-list').children.length === 1 && document.getElementById('history-list').children.length === 1`);
+    assert.equal(await evaluate(`document.getElementById('incident-assignee-name').textContent.includes('Bruno')`), true);
+    await evaluate(`document.getElementById('back-button').click()`);
+    await wait(`document.querySelectorAll('#incident-list .incident').length === 1`);
+    await evaluate(`document.getElementById('incident-export-button').click()`);
+    await poll(() => fs.readdirSync(downloads).some(name => name.endsWith('.csv')));
+    const csvFile = fs.readdirSync(downloads).find(name => name.endsWith('.csv'));
+    const csvText = fs.readFileSync(path.join(downloads, csvFile), 'utf8');
+    assert.ok(csvText.includes('Correo sospechoso en Nube Clara'));
+    assert.ok(!csvText.includes('Interrupción simulada de Atlas') && !csvText.includes('Delta'));
+    await evaluate(`Array.from(document.querySelectorAll('.risk-title')).find(e=>e.textContent.includes('Acceso indebido')).click()`);
+    await wait(`document.querySelectorAll('#assessment-list > li').length === 2 && document.querySelectorAll('#associated-list li').length === 2`);
+    assert.equal(await evaluate(`document.getElementById('assessment-latest').textContent.includes('8') && document.getElementById('risk-assignee-name').textContent.includes('Bruno')`), true);
+    await wait(`document.querySelectorAll('#audit-list li').length > 0`);
+    assert.equal(await evaluate(`document.getElementById('audit-list').textContent.includes('Bruno')`), true);
+    await evaluate(`document.getElementById('logout-button').click()`);
+    await wait(`!document.getElementById('login-view').hidden`);
+    await demoLogin('analista@aurora.example.test');
+    await wait(`document.querySelectorAll('#incident-list .incident').length === 3`);
+    assert.equal(await evaluate(`document.getElementById('audit-view').hidden && !document.getElementById('new-button').hidden`), true);
+    await evaluate(`document.getElementById('logout-button').click()`);
+    await wait(`!document.getElementById('login-view').hidden`);
+    await demoLogin('lector@aurora.example.test');
+    await wait(`document.querySelectorAll('#incident-list .incident').length === 3`);
+    assert.equal(await evaluate(`document.getElementById('new-button').hidden && document.getElementById('incident-export-button').hidden && document.getElementById('audit-view').hidden`), true);
+    await evaluate(`document.getElementById('logout-button').click()`);
+    await wait(`!document.getElementById('login-view').hidden`);
+    await demoLogin('admin@delta.example.test');
+    await wait(`document.querySelectorAll('#incident-list .incident').length === 1 && document.querySelectorAll('#asset-list .asset').length === 1`);
+    assert.equal(await evaluate(`document.getElementById('incident-list').textContent.includes('Revisión exclusiva de Delta') && !document.getElementById('incident-list').textContent.includes('Nube Clara')`), true);
+    assert.equal(await evaluate(`fetch('/incidents/1').then(r=>r.status)`), 404);
+    console.log('OK: demo ficticia en Chrome: investigación, activos, historial, riesgo, controles, residual, auditoría, CSV filtrado, tres roles y aislamiento de Delta.');
+    await command('Browser.close');
+    return;
+  }
   await evaluate(`(() => {const f=document.getElementById('login-form');f.elements.email.value='admin@example.test';f.elements.password.value='correct horse battery';f.requestSubmit();})()`);
   await wait(`document.getElementById('list-feedback')?.textContent.includes('Todavía')`);
   assert.equal(await evaluate(`document.documentElement.lang`),'es');

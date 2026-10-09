@@ -119,6 +119,9 @@ function showLogin() {
   $("app-view").hidden = true;
   $("login-view").hidden = false;
   $("incident-list").replaceChildren();
+  $("filter-form").reset();
+  $("create-form").reset();
+  $("note-form").reset();
   $("user-list").replaceChildren();
   $("count").textContent = "";
   $("list-feedback").textContent = "";

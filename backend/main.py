@@ -1629,10 +1629,18 @@ def run_cli() -> int:
     parser = argparse.ArgumentParser(description="Herramientas locales de SecurityOps")
     parser.add_argument(
         "command",
-        choices=("create-admin", "create-organization"),
-        help="crear el primer administrador o una organización con su administrador",
+        choices=("create-admin", "create-organization", "create-demo"),
+        help="crear administrador, organización o base ficticia de demostración",
     )
+    parser.add_argument("--database", help="archivo nuevo para create-demo")
     arguments = parser.parse_args()
+    if arguments.command == "create-demo":
+        if not arguments.database:
+            parser.error("create-demo requiere --database")
+        from demo import create_demo
+        return create_demo(sys.modules[__name__], arguments.database)
+    if arguments.database:
+        parser.error("--database solo se admite con create-demo; usá SECURITYOPS_DATABASE")
     if arguments.command == "create-admin":
         return create_first_admin()
     if arguments.command == "create-organization":

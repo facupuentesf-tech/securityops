@@ -15,6 +15,11 @@ env/
 # Archivos generados de Python
 backend/securityops.db*
 backend/securityops-before-organizations.bak
+# Bases locales de demostración y auxiliares SQLite, en cualquier carpeta
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
 __pycache__/
 *.py[cod]
 .pytest_cache/
