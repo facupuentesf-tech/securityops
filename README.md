@@ -1,6 +1,32 @@
-# securityops
+# SecurityOps
 
-Plataforma de gestión de seguridad para pequeñas y medianas empresas.
+SecurityOps reúne activos, incidentes, responsables, riesgos y controles que una
+pequeña organización podría tener dispersos en planillas. Permite seguir una
+investigación y documentar decisiones de riesgo con historial y auditoría.
+Es un prototipo local con FastAPI y SQLite, permisos por rol y aislamiento entre
+organizaciones; no incluye detección automática de amenazas ni está preparado
+para producción o uso compartido.
+
+## Presentación del prototipo
+
+El [guion de demo de seis minutos](docs/demo.md#guion-de-seis-minutos) recorre
+datos ficticios, roles y aislamiento. La [preparación y el cambio de base](docs/demo.md#iniciar-y-volver-a-la-base-habitual)
+explican cómo iniciar la demo y regresar a la base habitual.
+
+Las capturas de **Resumen**, **detalle de incidente**, **riesgo con evaluación
+residual** y **Auditoría** están pendientes: no fue posible capturar un navegador
+autenticado en esta preparación. No se incluyen imágenes simuladas. Su destino
+y los pasos para completarlas están en [docs/images](docs/images/README.md).
+
+### Desarrollo asistido por IA
+
+El proyecto se presenta como un prototipo desarrollado con asistencia de IA.
+Esta preparación utilizó IA para revisar el código y la documentación existente
+y organizar el recorrido de presentación. La funcionalidad debe evaluarse por
+el código, las pruebas reproducibles y lo observado al ejecutar la aplicación;
+la asistencia de IA no acredita experiencia laboral ni dominio de tecnologías
+o prácticas no demostradas. No se atribuyen aquí tareas concretas de la
+implementación a una persona o herramienta sin un registro que las respalde.
 
 ## Objetivo
 

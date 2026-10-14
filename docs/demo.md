@@ -62,10 +62,15 @@ archivo nuevo, por ejemplo `backend\portfolio-demo-2.db`.
 
 ## Iniciar y volver a la base habitual
 
-En la misma terminal, guardar la selección habitual antes de activar la demo:
+En la misma terminal, guardar la selección habitual antes de activar la demo.
+Si la base demo ya existe, no volver a ejecutar `create-demo`: definir su ruta
+explícitamente. Verificar que corresponde a la demo ficticia preparada, sin
+abrir ni mostrar datos de la base habitual:
 
 ```powershell
 $usualDatabase = $env:SECURITYOPS_DATABASE
+$demoDatabase = Join-Path $PWD 'backend\portfolio-demo.db'
+if (-not (Test-Path -LiteralPath $demoDatabase -PathType Leaf)) { throw 'Falta la base demo; seguir la preparación anterior.' }
 $env:SECURITYOPS_DATABASE = $demoDatabase
 .\backend\.venv\Scripts\python.exe -m uvicorn main:app --app-dir backend --host 127.0.0.1 --port 8000
 ```
@@ -97,9 +102,14 @@ que ya está iniciado. Las sesiones de la demo no sirven en la base habitual.
 
 ## Guion de seis minutos
 
-Preparación: iniciar sesión como administrador de Aurora; mantener las otras
-cuentas disponibles en el gestor. Toda modificación en la presentación queda
-persistida en la base demo, incluidos estados, notas y evaluaciones.
+Preparación: iniciar sesión con `admin@aurora.example.test` (Alba Demo) y la
+contraseña elegida al ejecutar `create-demo`; mantener las otras tres cuentas
+de la tabla disponibles en el gestor, sin mostrarlas junto a sus contraseñas.
+Este recorrido consulta los registros existentes: no guardar notas, estados,
+asignaciones ni evaluaciones. Iniciar/cerrar sesión sí crea o elimina sesiones
+en la base demo; no ejecutar la presentación si se exige conservarla byte a byte.
+Los totales y puntajes siguientes corresponden a la carga inicial de `create-demo`;
+si la demo fue usada antes, comprobarlos y explicar cualquier diferencia.
 
 1. **0:00–0:45 — Problema y resumen.** Explicar la información dispersa y abrir
    Resumen: Aurora tiene 3 incidentes, 4 activos, 3 riesgos y 3 controles. Mostrar
@@ -108,7 +118,7 @@ persistida en la base demo, incluidos estados, notas y evaluaciones.
 2. **0:45–1:50 — Investigación.** Ir a Gestión, filtrar incidentes por “En
    investigación” y severidad alta, abrir “Correo sospechoso en Nube Clara”.
    Mostrar a Bruno como responsable, los dos activos afectados, la nota y el
-   historial atribuido. Agregar una nota breve marcada como simulación. El
+   historial atribuido. Leer la nota ficticia ya creada, sin agregar otra. El
    incidente de Atlas sigue abierto sin responsable; el acceso de prueba ya
    tiene dos cambios de estado hasta resuelto.
 3. **1:50–2:30 — Activos.** Filtrar por servicio y criticidad crítica; abrir
@@ -121,21 +131,47 @@ persistida en la base demo, incluidos estados, notas y evaluaciones.
    no equivale a eficacia medida.
 5. **3:15–4:00 — Evaluación residual.** Abrir el historial: dos estimaciones
    manuales con puntajes 12 y 8, original 20 y justificación. Mostrar la
-   instantánea de controles y evaluador. Opcionalmente registrar otra evaluación
-   explicando que es una decisión ficticia; no reemplaza la original ni modifica
-   sus métricas del dashboard.
+   sección **Evaluación residual** y desplegar **Historial de evaluaciones
+   residuales**. Mostrar evaluador, fecha y la instantánea de la evaluación
+   original conservada en cada registro (no se guarda una instantánea de los
+   controles). Explicar que no reemplaza la original ni modifica sus métricas
+   del dashboard; no pulsar **Guardar evaluación**.
 6. **4:00–4:50 — Auditoría y exportación.** En auditoría, filtrar acción o tipo
    de recurso para revisar creación, asignación, nota, vínculo o evaluación.
    Las operaciones usan la lógica existente y registran actor y organización;
    no se inventaron filas de auditoría. Volver a incidentes, aplicar filtros y
-   exportar CSV; abrir el archivo descargado para mostrar que respeta los
-   filtros. Los lectores no pueden exportar.
-7. **4:50–6:00 — Roles y aislamiento.** Cerrar sesión e ingresar como analista:
-   puede investigar y evaluar, pero no administrar usuarios ni asignar
-   responsables. Cerrar sesión e ingresar como lector de Aurora: consulta sin
-   formularios de escritura ni auditoría. Finalmente ingresar como administrador
-   de Delta: resumen con 1 incidente y 1 activo exclusivo, sin recursos de
-   Aurora. La API también verifica permisos y devuelve 404 para IDs ajenos.
+   señalar **Exportar CSV** y explicar que respeta los filtros; para mantener
+   el ritmo, la descarga puede quedar para preguntas. Los lectores no pueden
+   exportar. En Auditoría, seleccionar acción **Evaluación residual** y recurso
+   **Riesgo**, aplicar filtros y mostrar actor, fecha e IDs del evento.
+7. **4:50–6:00 — Roles y aislamiento.** Usar **Cerrar sesión** antes de cada
+   cambio de cuenta:
+   - Ingresar con `analista@aurora.example.test` (Bruno Demo), abrir Gestión
+     y el mismo incidente/riesgo: mostrar formularios para investigar y evaluar,
+     sin enviarlos. No dispone de gestión de usuarios, Auditoría ni asignación
+     de responsables.
+   - Ingresar con `lector@aurora.example.test` (Clara Demo): abrir el mismo
+     detalle y su historial residual; puede consultar, sin formularios de
+     escritura, exportación ni Auditoría.
+   - Ingresar con `admin@delta.example.test` (Dalia Demo): abrir Resumen
+     (1 incidente, 1 activo, 0 riesgos y 0 controles), luego Gestión. Mostrar
+     **Revisión exclusiva de Delta** y **Estación Delta exclusiva**; los recursos
+     de Aurora no aparecen. Es otra organización, aunque el rol sea administrador.
+
+La vista demuestra el cambio de alcance; la garantía del backend se comprueba
+por separado con las pruebas existentes: permisos denegados con `403` e IDs
+de otra organización con `404`. No presentar el cambio visual como prueba
+suficiente de todos los permisos de la API. Para llegar a siete minutos, ampliar
+la explicación de historial y aislamiento; para cinco, abreviar Activos y CSV.
+
+## Capturas de la presentación
+
+Las cuatro capturas están pendientes; esta preparación no dispuso de un
+navegador autenticado y no inició el servidor ni sesiones para evitar escrituras
+en las bases. No se crearon imágenes de reemplazo. Seguir el
+[plan de capturas](images/README.md) una vez habilitada una sesión de demo.
+La presentación y el guion se revisaron contra los archivos del repositorio,
+sin ejecutar la aplicación ni las pruebas en esta preparación.
 
 ## Decisiones técnicas y límites
 
